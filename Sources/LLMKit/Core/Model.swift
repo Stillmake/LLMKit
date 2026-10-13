@@ -333,13 +333,13 @@ public struct Model: Codable, Sendable, Hashable, Identifiable {
         return supported.first { $0 >= level } ?? supported.last ?? .off
     }
 
-    /// The provider value for a level: its mapping when one is set, else the level's own name;
-    /// `nil` when the level is mapped as unsupported.
+    /// The provider value for a level: its mapping when one is set, else the level's own name
+    /// (`none` for `off`, which no API spells `off`); `nil` when the level is mapped as unsupported.
     func thinkingValue(for level: ThinkingLevel) -> String? {
         switch thinkingLevelMap?[level] {
         case .unsupported: nil
         case .value(let value): value
-        case nil: level.rawValue
+        case nil: level == .off ? "none" : level.rawValue
         }
     }
 
