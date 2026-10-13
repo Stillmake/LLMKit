@@ -8,7 +8,7 @@ LLMKit implements, sorted for stable diffs. It also writes providers.json, each
 provider's display name and models.dev logo id, read once from models.dev's API.
 
 The output is the same snapshot `ModelCatalog.download(version:)` builds at runtime:
-`{"version": <pi-ai version>, "models": [...]}`.
+`{"version": <pi-ai version>, "generatedAt": <manifest timestamp>, "models": [...]}`.
 
 Usage: Scripts/sync-catalog.py <pi-ai providers/data directory>
 """
@@ -54,7 +54,10 @@ models = [
 ]
 models.sort(key=lambda model: (model["provider"], model["id"]))
 version = json.loads((source / "../../../package.json").resolve().read_text())["version"]
-target.write_text(json.dumps({"version": version, "models": models}, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+generated_at = json.loads((source / ".manifest.json").read_text())["generatedAt"]
+target.write_text(json.dumps(
+    {"version": version, "generatedAt": generated_at, "models": models}, indent=1, sort_keys=True, ensure_ascii=False
+) + "\n")
 print(f"{len(models)} models -> {target}")
 
 with urllib.request.urlopen("https://models.dev/api.json") as response:

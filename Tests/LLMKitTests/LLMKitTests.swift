@@ -146,6 +146,7 @@ import Testing
         #expect(Set(catalog.providerInfo.keys) == Set(catalog.providers))
         #expect(catalog.providerInfo["deepseek"] == ProviderInfo(name: "DeepSeek", logo: "deepseek"))
         #expect(catalog.version != nil)
+        #expect(catalog.generatedAt != nil)
     }
 
     @Test func snapshotRoundTrips() throws {
@@ -154,6 +155,7 @@ import Testing
         try ModelCatalog.builtin.write(to: url)
         let loaded = try ModelCatalog(contentsOf: url)
         #expect(loaded.version == ModelCatalog.builtin.version)
+        #expect(loaded.generatedAt == ModelCatalog.builtin.generatedAt)
         #expect(loaded.models == ModelCatalog.builtin.models)
         #expect(catalog.models.allSatisfy { [.openAICompletions, .openAIResponses, .openAICodexResponses, .anthropicMessages, .googleGenerativeAI].contains($0.api) })
     }
