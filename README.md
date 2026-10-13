@@ -53,6 +53,19 @@ Ported: the five adapters above, `transform-messages`, transcript system-message
 
 Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket transport, OpenAI grammar (custom) tools, mid-conversation tool additions and effort messages, Anthropic server-side fallbacks, OAuth login flows, and image generation and classifiers.
 
+## Updating the catalog at runtime
+
+`ModelCatalog.builtin` is a bundled snapshot so the package works offline. Apps fetch newer ones from pi-ai's published data on jsDelivr; LLMKit never refreshes by itself, so the app chooses when:
+
+```swift
+let latest = try await ModelCatalog.latestVersion()          // one small request
+if latest != catalog.version {
+    catalog = try await ModelCatalog.download(version: latest) // immutable, CDN-cached files
+    try catalog.write(to: cacheURL)
+}
+// Next launch: (try? ModelCatalog(contentsOf: cacheURL)) ?? .builtin
+```
+
 ## Syncing with pi-ai
 
 Ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`. The catalog comes from `@earendil-works/pi-ai` 1.2.0. To refresh it:

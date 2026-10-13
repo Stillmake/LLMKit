@@ -145,6 +145,16 @@ import Testing
         #expect(catalog.providers.contains("anthropic"))
         #expect(Set(catalog.providerInfo.keys) == Set(catalog.providers))
         #expect(catalog.providerInfo["deepseek"] == ProviderInfo(name: "DeepSeek", logo: "deepseek"))
+        #expect(catalog.version != nil)
+    }
+
+    @Test func snapshotRoundTrips() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try ModelCatalog.builtin.write(to: url)
+        let loaded = try ModelCatalog(contentsOf: url)
+        #expect(loaded.version == ModelCatalog.builtin.version)
+        #expect(loaded.models == ModelCatalog.builtin.models)
         #expect(catalog.models.allSatisfy { [.openAICompletions, .openAIResponses, .openAICodexResponses, .anthropicMessages, .googleGenerativeAI].contains($0.api) })
     }
 

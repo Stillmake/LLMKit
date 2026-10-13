@@ -7,6 +7,9 @@ This script flattens those files into one array of chat models whose wire format
 LLMKit implements, sorted for stable diffs. It also writes providers.json, each
 provider's display name and models.dev logo id, read once from models.dev's API.
 
+The output is the same snapshot `ModelCatalog.download(version:)` builds at runtime:
+`{"version": <pi-ai version>, "models": [...]}`.
+
 Usage: Scripts/sync-catalog.py <pi-ai providers/data directory>
 """
 
@@ -50,7 +53,8 @@ models = [
     if model.get("type", "chat") == "chat"
 ]
 models.sort(key=lambda model: (model["provider"], model["id"]))
-target.write_text(json.dumps(models, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
+version = json.loads((source / "../../../package.json").resolve().read_text())["version"]
+target.write_text(json.dumps({"version": version, "models": models}, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
 print(f"{len(models)} models -> {target}")
 
 with urllib.request.urlopen("https://models.dev/api.json") as response:
