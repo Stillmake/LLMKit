@@ -43,6 +43,8 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 - **Compatibility as data.** `ModelCompat` covers the developer vs. system role, the max-tokens field name, reasoning-format variants, usage in streams, strict tools, cache-control conventions, session-affinity headers, and more. Defaults are detected from the provider and URL, and the catalog overrides them.
 - **Errors never throw from `stream`.** A failure ends the stream with `.error(message)`, where `stopReason` is `.error` or `.aborted`. Cancelling the consuming task cancels the request. Requests that fail before streaming starts are retried (408, 409, 429, 5xx, network errors), honoring `retry-after`.
 
+`ModelCatalog.builtin.providerInfo` gives each provider's display name and models.dev logo id (`https://models.dev/logos/<logo>.svg`).
+
 API keys come from `StreamOptions.apiKey`, or from the provider's environment variable (`APIKeyEnvironment.apiKeyVariables`).
 
 ## Scope relative to pi-ai
@@ -58,6 +60,8 @@ Ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`. The catal
 ```sh
 Scripts/sync-catalog.py <path to pi-ai>/dist/providers/data
 ```
+
+The script also reads https://models.dev/api.json once for provider names and logos; a provider models.dev lacks must be added to its `PROVIDER_OVERRIDES`.
 
 When a provider's behavior changes upstream, review `packages/ai/src/api/` in pi-mono and port the change to the matching file under `Sources/LLMKit/API/`.
 

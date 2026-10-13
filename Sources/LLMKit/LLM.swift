@@ -49,23 +49,45 @@ public enum LLM {
     }
 }
 
+/// A provider's display name and its logo on models.dev.
+public struct ProviderInfo: Codable, Sendable, Hashable {
+    /// Display name, e.g. `DeepSeek`.
+    public var name: String
+    /// The models.dev provider id whose logo is at `https://models.dev/logos/<logo>.svg`.
+    public var logo: String
+
+    public init(name: String, logo: String) {
+        self.name = name
+        self.logo = logo
+    }
+}
+
 /// The built-in model catalog, generated from pi-ai's (see `Scripts/sync-catalog.py`).
 public struct ModelCatalog: Sendable {
     public let models: [Model]
+    /// Keyed by provider id.
+    public let providerInfo: [String: ProviderInfo]
 
-    public init(models: [Model]) {
+    public init(models: [Model], providerInfo: [String: ProviderInfo] = [:]) {
         self.models = models
+        self.providerInfo = providerInfo
     }
 
     public static let builtin: ModelCatalog = {
-        guard let url = Bundle.module.url(forResource: "models", withExtension: "json"),
-            let data = try? Data(contentsOf: url),
-            let models = try? JSONDecoder().decode([Model].self, from: data)
-        else {
-            assertionFailure("The bundled model catalog is missing or malformed")
-            return ModelCatalog(models: [])
+        func load<T: Decodable>(_ name: String, as type: T.Type) -> T? {
+            guard let url = Bundle.module.url(forResource: name, withExtension: "json"),
+                let data = try? Data(contentsOf: url),
+                let value = try? JSONDecoder().decode(type, from: data)
+            else {
+                assertionFailure("The bundled \(name).json is missing or malformed")
+                return nil
+            }
+            return value
         }
-        return ModelCatalog(models: models)
+        return ModelCatalog(
+            models: load("models", as: [Model].self) ?? [],
+            providerInfo: load("providers", as: [String: ProviderInfo].self) ?? [:]
+        )
     }()
 
     public var providers: [String] {

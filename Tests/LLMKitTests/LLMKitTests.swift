@@ -143,6 +143,8 @@ import Testing
         let catalog = ModelCatalog.builtin
         #expect(catalog.models.count > 1000)
         #expect(catalog.providers.contains("anthropic"))
+        #expect(Set(catalog.providerInfo.keys) == Set(catalog.providers))
+        #expect(catalog.providerInfo["deepseek"] == ProviderInfo(name: "DeepSeek", logo: "deepseek"))
         #expect(catalog.models.allSatisfy { [.openAICompletions, .openAIResponses, .openAICodexResponses, .anthropicMessages, .googleGenerativeAI].contains($0.api) })
     }
 

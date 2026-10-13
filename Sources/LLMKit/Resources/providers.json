@@ -1,0 +1,150 @@
+{
+ "ant-ling": {
+  "name": "Ant Ling",
+  "logo": "bailing"
+ },
+ "anthropic": {
+  "name": "Anthropic",
+  "logo": "anthropic"
+ },
+ "azure": {
+  "name": "Azure",
+  "logo": "azure"
+ },
+ "baseten": {
+  "name": "Baseten",
+  "logo": "baseten"
+ },
+ "cerebras": {
+  "name": "Cerebras",
+  "logo": "cerebras"
+ },
+ "cloudflare-ai-gateway": {
+  "name": "Cloudflare AI Gateway",
+  "logo": "cloudflare-ai-gateway"
+ },
+ "cloudflare-workers-ai": {
+  "name": "Cloudflare Workers AI",
+  "logo": "cloudflare-workers-ai"
+ },
+ "deepseek": {
+  "name": "DeepSeek",
+  "logo": "deepseek"
+ },
+ "fireworks": {
+  "name": "Fireworks AI",
+  "logo": "fireworks-ai"
+ },
+ "github-copilot": {
+  "name": "GitHub Copilot",
+  "logo": "github-copilot"
+ },
+ "google": {
+  "name": "Google",
+  "logo": "google"
+ },
+ "groq": {
+  "name": "Groq",
+  "logo": "groq"
+ },
+ "huggingface": {
+  "name": "Hugging Face",
+  "logo": "huggingface"
+ },
+ "kimi-coding": {
+  "name": "Kimi For Coding",
+  "logo": "kimi-code-plan-global"
+ },
+ "meta": {
+  "name": "Meta",
+  "logo": "meta"
+ },
+ "minimax": {
+  "name": "MiniMax (minimax.io)",
+  "logo": "minimax"
+ },
+ "minimax-cn": {
+  "name": "MiniMax (minimax.cn)",
+  "logo": "minimax-cn"
+ },
+ "moonshotai": {
+  "name": "Moonshot AI",
+  "logo": "moonshotai"
+ },
+ "moonshotai-cn": {
+  "name": "Moonshot AI (China)",
+  "logo": "moonshotai-cn"
+ },
+ "nvidia": {
+  "name": "Nvidia",
+  "logo": "nvidia"
+ },
+ "openai": {
+  "name": "OpenAI",
+  "logo": "openai"
+ },
+ "openai-codex": {
+  "name": "OpenAI Codex",
+  "logo": "openai"
+ },
+ "opencode": {
+  "name": "OpenCode",
+  "logo": "opencode"
+ },
+ "opencode-go": {
+  "name": "OpenCode Go",
+  "logo": "opencode-go"
+ },
+ "openrouter": {
+  "name": "OpenRouter",
+  "logo": "openrouter"
+ },
+ "qwen-token-plan": {
+  "name": "Qwen Token Plan",
+  "logo": "alibaba-token-plan"
+ },
+ "qwen-token-plan-cn": {
+  "name": "Qwen Token Plan (China)",
+  "logo": "alibaba-token-plan"
+ },
+ "qwen-token-plan-individual": {
+  "name": "Qwen Token Plan (Individual)",
+  "logo": "alibaba-token-plan"
+ },
+ "together": {
+  "name": "Together AI",
+  "logo": "togetherai"
+ },
+ "vercel-ai-gateway": {
+  "name": "Vercel AI Gateway",
+  "logo": "vercel"
+ },
+ "xai": {
+  "name": "xAI",
+  "logo": "xai"
+ },
+ "xiaomi": {
+  "name": "Xiaomi",
+  "logo": "xiaomi"
+ },
+ "xiaomi-token-plan-ams": {
+  "name": "Xiaomi Token Plan (Europe)",
+  "logo": "xiaomi-token-plan-ams"
+ },
+ "xiaomi-token-plan-cn": {
+  "name": "Xiaomi Token Plan (China)",
+  "logo": "xiaomi-token-plan-cn"
+ },
+ "xiaomi-token-plan-sgp": {
+  "name": "Xiaomi Token Plan (Singapore)",
+  "logo": "xiaomi-token-plan-sgp"
+ },
+ "zai": {
+  "name": "Z.AI",
+  "logo": "zai"
+ },
+ "zai-coding-cn": {
+  "name": "Z.AI Coding Plan (China)",
+  "logo": "zhipuai-coding-plan"
+ }
+}

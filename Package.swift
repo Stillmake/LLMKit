@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         .target(
             name: "LLMKit",
-            resources: [.copy("Resources/models.json")]
+            resources: [.copy("Resources/models.json"), .copy("Resources/providers.json")]
         ),
         .testTarget(
             name: "LLMKitTests",
