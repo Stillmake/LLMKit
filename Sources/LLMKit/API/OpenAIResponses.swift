@@ -116,8 +116,8 @@ enum OpenAICodexResponses {
             ? claims[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
             : ""
         guard claims.count == 3,
-            let payload = Data(base64Encoded: encodedClaims + String(repeating: "=", count: (4 - encodedClaims.count % 4) % 4)),
-            let accountId = (try? JSONValue(data: payload))?["https://api.openai.com/auth"]?["chatgpt_account_id"]?.stringValue
+            let claimsData = Data(base64Encoded: encodedClaims + String(repeating: "=", count: (4 - encodedClaims.count % 4) % 4)),
+            let accountId = (try? JSONValue(data: claimsData))?["https://api.openai.com/auth"]?["chatgpt_account_id"]?.stringValue
         else {
             throw LLMError.invalidRequest("Failed to extract the ChatGPT account id from the access token")
         }

@@ -14,7 +14,7 @@ enum StrictSchema {
     ]
 
     /// Provider-specific keywords its strict mode rejects.
-    typealias KeywordCheck = (String, JSONValue) -> Bool
+    typealias KeywordCheck = @Sendable (String, JSONValue) -> Bool
 
     /// Anthropic strict tool use rejects these for the whole request.
     static let anthropicKeywordCheck: KeywordCheck = { key, value in

@@ -15,10 +15,10 @@ public typealias JSONObject = [String: JSONValue]
 
 // MARK: - Literals
 
-extension JSONValue: ExpressibleByNilLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral,
-    ExpressibleByFloatLiteral, ExpressibleByStringLiteral, ExpressibleByArrayLiteral, ExpressibleByDictionaryLiteral
+// No ExpressibleByNilLiteral: `nil` in a `JSONValue?` context must mean "absent", not `.null`.
+extension JSONValue: ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral,
+    ExpressibleByStringLiteral, ExpressibleByArrayLiteral, ExpressibleByDictionaryLiteral
 {
-    public init(nilLiteral: ()) { self = .null }
     public init(booleanLiteral value: Bool) { self = .bool(value) }
     public init(integerLiteral value: Int) { self = .number(Double(value)) }
     public init(floatLiteral value: Double) { self = .number(value) }

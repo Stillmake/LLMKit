@@ -136,7 +136,7 @@ enum HTTP {
         var retriesLeft = options.raw.maxRetries
         while true {
             try Task.checkCancellation()
-            let failure: LLMError
+            var failure: LLMError
             var serverDelay: Duration?
             do {
                 let (bytes, response) = try await options.raw.session.bytes(for: request)
