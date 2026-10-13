@@ -17,6 +17,13 @@ public enum LLM {
             let builder = ResponseBuilder(model: model, continuation: continuation)
             do {
                 let transcript = Transcript.normalize(context)
+                var options = options
+                // OpenCode routes each conversation by a required session header (pi-ai's opencode-headers).
+                if ["opencode", "opencode-go"].contains(model.provider), let sessionId = options.sessionId,
+                    !options.headers.keys.contains(where: { $0.lowercased() == "x-opencode-session" })
+                {
+                    options.headers["x-opencode-session"] = sessionId
+                }
                 let resolved = ResolvedOptions(model: model, transcript: transcript, options: options)
                 switch model.api {
                 case .openAICompletions:

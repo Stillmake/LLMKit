@@ -41,7 +41,7 @@ public struct StreamOptions: Sendable {
     public var thinkingBudgets: ThinkingBudgets?
     public var toolChoice: ToolChoice?
     public var cacheRetention: CacheRetention
-    /// Identifies a conversation for prompt caching and session-affinity routing.
+    /// Identifies a conversation for prompt caching and session-affinity routing. OpenCode requires it.
     public var sessionId: String?
     /// Arbitrary sampling parameters (`top_p`, `top_k`, `min_p`, ...), merged over the model's
     /// defaults per key. Applied by the OpenAI-compatible APIs.
