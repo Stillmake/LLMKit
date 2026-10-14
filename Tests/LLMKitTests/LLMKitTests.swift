@@ -157,7 +157,7 @@ import Testing
         #expect(loaded.version == ModelCatalog.builtin.version)
         #expect(loaded.generatedAt == ModelCatalog.builtin.generatedAt)
         #expect(loaded.models == ModelCatalog.builtin.models)
-        #expect(catalog.models.allSatisfy { [.openAICompletions, .openAIResponses, .openAICodexResponses, .anthropicMessages, .googleGenerativeAI].contains($0.api) })
+        #expect(loaded.models.allSatisfy { [.openAICompletions, .openAIResponses, .openAICodexResponses, .anthropicMessages, .googleGenerativeAI].contains($0.api) })
     }
 
     @Test func clampsThinkingLevels() {
