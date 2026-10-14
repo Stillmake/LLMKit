@@ -105,6 +105,6 @@ struct AnthropicOAuth: OAuthProvider {
         guard let access = response.string("access_token"), let refresh = response.string("refresh_token"),
             let expiresIn = response.positive("expires_in")
         else { throw LLMError.auth("Anthropic \(action) returned an invalid response: \(response.text)") }
-        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn - 5 * 60))
+        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn - 5 * 60), extra: OAuthHTTP.account(response))
     }
 }

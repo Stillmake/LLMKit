@@ -12,13 +12,15 @@ public enum LLMError: Error, LocalizedError, Sendable {
     case invalidRequest(String)
     /// Login, credential storage or token refresh failed.
     case auth(String)
+    /// The provider rejected the stored credential's refresh; the user has to sign in again.
+    case signInRequired(provider: String, message: String)
 
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey(let provider): "No API key for provider: \(provider)"
         case .unsupportedAPI(let api): "No adapter for API: \(api)"
         case .http(let status, let message, _): "\(status) \(message)"
-        case .protocolViolation(let message), .provider(let message), .invalidRequest(let message), .auth(let message): message
+        case .protocolViolation(let message), .provider(let message), .invalidRequest(let message), .auth(let message), .signInRequired(_, let message): message
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Request auth derived from a credential. Anything that cannot be expressed as an API key,
 /// headers or a base URL is provider configuration, not auth. Ports pi-ai's `ModelAuth`.
@@ -30,6 +31,16 @@ public struct OAuthCredential: Sendable, Hashable {
         self.refresh = refresh
         self.expires = expires
         self.extra = extra
+    }
+
+    /// The signed-in account's email, when the token response names it (Anthropic, OpenAI, xAI).
+    public var account: String? {
+        extra["account"]?.stringValue
+    }
+
+    /// Models the account may use, when the provider reports them (GitHub Copilot).
+    public var availableModelIds: [String]? {
+        extra["availableModelIds"]?.arrayValue?.compactMap(\.stringValue)
     }
 }
 
@@ -81,6 +92,12 @@ public enum AuthPrompt: Sendable, Hashable {
         public var id: String
         public var label: String
         public var description: String?
+
+        public init(id: String, label: String, description: String? = nil) {
+            self.id = id
+            self.label = label
+            self.description = description
+        }
     }
 
     case text(message: String, placeholder: String?)
@@ -161,6 +178,20 @@ public protocol CredentialStore: Sendable {
     func read(_ provider: String) async throws -> Credential?
     func modify(_ provider: String, _ body: @escaping @Sendable (Credential?) async throws -> Credential?) async throws -> Credential?
     func delete(_ provider: String) async throws
+    /// Every provider with a stored credential.
+    func providers() async throws -> [String]
+}
+
+extension CredentialStore {
+    /// Probes the built-in OAuth providers, for stores that cannot list their keys. Credentials
+    /// stored under any other id are not found; override when the backing store can enumerate.
+    public func providers() async throws -> [String] {
+        var stored: [String] = []
+        for provider in OAuthProviders.builtin.keys where try await read(provider) != nil {
+            stored.append(provider)
+        }
+        return stored
+    }
 }
 
 /// Stores each provider's credential as JSON under `"<keyPrefix><provider>"` in the caller's
@@ -191,6 +222,10 @@ public actor UserDefaultsCredentialStore: CredentialStore {
 
     public func delete(_ provider: String) async throws {
         try await enqueue(provider) { try await self.store(nil, for: provider) }
+    }
+
+    public func providers() -> [String] {
+        defaults.dictionaryRepresentation().keys.filter { $0.hasPrefix(keyPrefix) }.map { String($0.dropFirst(keyPrefix.count)) }
     }
 
     private func store(_ credential: Credential?, for provider: String) throws {
@@ -227,17 +262,69 @@ public actor UserDefaultsCredentialStore: CredentialStore {
 public struct Credentials: Sendable {
     public let store: any CredentialStore
     public var providers: [String: any OAuthProvider]
+    /// Carries the built-in providers' login and token-refresh requests; custom `OAuthProvider`s
+    /// make their own requests. Model requests use `StreamOptions.session`.
+    public var session: URLSession
 
-    public init(store: any CredentialStore, providers: [String: any OAuthProvider] = OAuthProviders.builtin) {
+    public init(store: any CredentialStore, providers: [String: any OAuthProvider] = OAuthProviders.builtin, session: URLSession = .shared) {
         self.store = store
         self.providers = providers
+        self.session = session
     }
 
     /// Runs the provider's OAuth login and stores the result.
     public func login(_ provider: String, interaction: AuthInteraction, options: LoginOptions = LoginOptions()) async throws {
         guard let oauth = providers[provider] else { throw LLMError.auth("No OAuth login for provider \(provider)") }
-        let credential = try await oauth.login(interaction, options: options)
+        let credential = try await OAuthHTTP.$session.withValue(session) { try await oauth.login(interaction, options: options) }
         _ = try await store.modify(provider) { _ in .oauth(credential) }
+    }
+
+    /// Runs the login as a stream of what the UI should show, so the app needs no `AuthInteraction`.
+    /// The stream finishes once the credential is stored and throws when the login fails; ending
+    /// iteration early (or cancelling the consuming task) cancels the login.
+    ///
+    /// ```swift
+    /// for try await update in credentials.login("xai") {
+    ///     switch update {
+    ///     case .event(let event, _): show(event)
+    ///     case .prompt(let prompt): ask(prompt)            // answer with prompt.answer(_:)
+    ///     case .promptWithdrawn(let id): dismissPrompt(id)
+    ///     }
+    /// }
+    /// ```
+    public func login(_ provider: String, options: LoginOptions = LoginOptions()) -> AsyncThrowingStream<LoginUpdate, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await login(provider, interaction: AuthInteraction(
+                        prompt: { prompt in
+                            let pending = PendingPrompt(prompt)
+                            return try await withTaskCancellationHandler {
+                                try await withCheckedThrowingContinuation { reply in
+                                    if pending.install(reply) { continuation.yield(.prompt(pending)) }
+                                }
+                            } onCancel: {
+                                if pending.withdraw() { continuation.yield(.promptWithdrawn(pending.id)) }
+                            }
+                        },
+                        notify: { continuation.yield(.event($0, receivedAt: .now)) }
+                    ), options: options)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Providers holding an OAuth credential.
+    public func signedInProviders() async throws -> Set<String> {
+        var signedIn: Set<String> = []
+        for provider in try await store.providers() {
+            if case .oauth? = try await store.read(provider) { signedIn.insert(provider) }
+        }
+        return signedIn
     }
 
     public func setAPIKey(_ key: String, for provider: String) async throws {
@@ -263,12 +350,18 @@ public struct Credentials: Sendable {
                 // The refresh is unstructured: once started, the provider may have rotated the refresh
                 // token, so a cancelled caller must not discard the result.
                 let store = store
+                let session = session
                 let post = try await Task {
                     try await store.modify(provider) { current in
                         guard case .oauth(let current)? = current, expiresSoon(current) else { return nil }
                         do {
                             return .oauth(try await withThrowingTaskGroup(of: OAuthCredential.self) { group in
-                                group.addTask { try await oauth.refresh(current) }
+                                group.addTask {
+                                    var refreshed = try await OAuthHTTP.$session.withValue(session) { try await oauth.refresh(current) }
+                                    // Refresh responses rarely carry an id_token; the account stays the same.
+                                    refreshed.extra["account"] = refreshed.extra["account"] ?? current.extra["account"]
+                                    return refreshed
+                                }
                                 group.addTask {
                                     try await Task.sleep(for: .seconds(15))
                                     throw LLMError.auth("timed out")
@@ -276,8 +369,13 @@ public struct Credentials: Sendable {
                                 defer { group.cancelAll() }
                                 return try await group.next()!
                             })
-                        } catch {
+                        } catch let error as URLError {
                             throw LLMError.auth("OAuth refresh failed for \(provider): \(error.localizedDescription)")
+                        } catch LLMError.auth("timed out") {
+                            throw LLMError.auth("OAuth refresh timed out for \(provider)")
+                        } catch {
+                            // Anything but a network failure or a timeout is the provider refusing the token.
+                            throw LLMError.signInRequired(provider: provider, message: "OAuth refresh failed for \(provider): \(error.localizedDescription)")
                         }
                     }
                 }.value
@@ -297,5 +395,71 @@ public struct Credentials: Sendable {
 
     public func complete(model: Model, context: Context, options: StreamOptions = StreamOptions()) async throws -> AssistantMessage {
         try await stream(model: model, context: context, options: options).result()
+    }
+}
+
+/// What a login shows next; see `Credentials.login(_:options:)`.
+public enum LoginUpdate: Sendable {
+    /// `receivedAt` anchors relative lifetimes such as a device code's `expiresIn`.
+    case event(AuthEvent, receivedAt: Date)
+    case prompt(PendingPrompt)
+    /// The flow stopped waiting for this prompt: the browser callback won the race with a
+    /// `manualCode` prompt, or the login was cancelled.
+    case promptWithdrawn(UUID)
+}
+
+/// A prompt waiting for the user. Answer it once; later answers and answers after withdrawal are ignored.
+public final class PendingPrompt: Sendable, Identifiable {
+    private enum State {
+        case waiting
+        case presented(CheckedContinuation<String, any Error>)
+        case settled
+    }
+
+    public let id = UUID()
+    public let prompt: AuthPrompt
+    private let state = OSAllocatedUnfairLock(initialState: State.waiting)
+
+    init(_ prompt: AuthPrompt) {
+        self.prompt = prompt
+    }
+
+    public func answer(_ text: String) {
+        settle()?.resume(returning: text)
+    }
+
+    /// Declines the prompt; the login fails with `CancellationError`, as when pi's prompt rejects.
+    public func cancel() {
+        settle()?.resume(throwing: CancellationError())
+    }
+
+    /// Whether the prompt should be presented; `false` when it was withdrawn first.
+    func install(_ reply: CheckedContinuation<String, any Error>) -> Bool {
+        let installed = state.withLock { state in
+            guard case .waiting = state else { return false }
+            state = .presented(reply)
+            return true
+        }
+        if !installed { reply.resume(throwing: CancellationError()) }
+        return installed
+    }
+
+    /// Whether the prompt had been presented and still needs dismissing.
+    func withdraw() -> Bool {
+        let reply = state.withLock { state -> CheckedContinuation<String, any Error>? in
+            defer { state = .settled }
+            guard case .presented(let reply) = state else { return nil }
+            return reply
+        }
+        reply?.resume(throwing: CancellationError())
+        return reply != nil
+    }
+
+    private func settle() -> CheckedContinuation<String, any Error>? {
+        state.withLock { state in
+            guard case .presented(let reply) = state else { return nil }
+            state = .settled
+            return reply
+        }
     }
 }

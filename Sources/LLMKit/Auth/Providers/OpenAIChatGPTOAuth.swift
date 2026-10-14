@@ -124,7 +124,7 @@ struct OpenAIChatGPTOAuth: OAuthProvider {
             refresh: response.json["refresh_token"]!.stringValue!,
             // Three minutes early so a request never starts with a token about to expire.
             expires: .now.addingTimeInterval(expiresIn - 3 * 60),
-            extra: ["clientId": .string(clientId), "scopes": .array(scopes.map(JSONValue.string))]
+            extra: OAuthHTTP.account(response).merging(["clientId": .string(clientId), "scopes": .array(scopes.map(JSONValue.string))]) { $1 }
         )
     }
 }

@@ -36,42 +36,44 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 
 ## Design
 
-- **One conversation format.** `Message` is `.system`, `.user`, `.assistant` or `.toolResult`. Assistant content is text, thinking and tool calls. It is `Codable` and is what you store.
-- **Switching models mid-conversation.** Provider-opaque data (Anthropic thinking signatures, OpenAI encrypted reasoning items, Gemini thought signatures, OpenRouter reasoning details) stays attached to the message and its source model. It is replayed only to that model. For any other model, thinking becomes plain text, tool-call ids are rewritten to the target's rules, errored turns are dropped, and orphaned tool calls get synthetic results.
-- **One event stream.** Every adapter emits `start`, `text*/thinking*/toolCall*` start-delta-end triples, then `done` or `error`. Deltas carry only new text. Tool-call deltas also carry a best-effort parse of the arguments so far.
-- **Parameters.** Common settings are typed: `temperature`, `maxTokens`, `reasoning`, `toolChoice`, `cacheRetention`. Adapters translate them into each format's fields. Thinking levels are clamped to what the model supports (`Model.supportedThinkingLevels`). `samplingParams` merges into OpenAI-style bodies over the model's defaults. `extraBody` deep-merges into every adapter's body, and `onPayload` can rewrite the final request.
-- **Compatibility as data.** `ModelCompat` covers the developer vs. system role, the max-tokens field name, reasoning-format variants, usage in streams, strict tools, cache-control conventions, session-affinity headers, and more. Defaults are detected from the provider and URL, and the catalog overrides them.
-- **Errors never throw from `stream`.** A failure ends the stream with `.error(message)`, where `stopReason` is `.error` or `.aborted`. Cancelling the consuming task cancels the request. Requests that fail before streaming starts are retried (408, 409, 429, 5xx, network errors), honoring `retry-after`.
+- **One conversation format.** `Message` (`.system`, `.user`, `.assistant`, `.toolResult`) is `Codable` and is what you store.
+- **Switch models mid-conversation.** Provider-opaque data (thinking signatures, encrypted reasoning) is replayed only to its source model; for others, thinking becomes text and tool calls are repaired.
+- **One event stream.** `start`, then text/thinking/tool-call start-delta-end triples, then `done` or `error`.
+- **Typed parameters.** `temperature`, `maxTokens`, `reasoning` (clamped to the model), `toolChoice`, `cacheRetention`; `extraBody` and `onPayload` reach the raw request.
+- **Compatibility as data.** `ModelCompat` captures per-provider quirks, detected from provider and URL and overridden by the catalog.
+- **`stream` never throws.** Failures end it with `.error`; cancelling the task cancels the request; pre-stream failures are retried, honoring `retry-after`.
 
-`ModelCatalog.builtin.providerInfo` gives each provider's display name and models.dev logo id (`https://models.dev/logos/<logo>.svg`).
-
-API keys come from `StreamOptions.apiKey`, from a stored credential (see below), or from the provider's environment variable (`APIKeyEnvironment.apiKeyVariables`).
+API keys come from `StreamOptions.apiKey`, a stored credential, or the provider's environment variable. `ModelCatalog.builtin.providerInfo` gives display names and models.dev logo ids.
 
 ## Subscription sign-in
 
-`Credentials` runs a provider's OAuth login, stores the result in a `CredentialStore`, and resolves request auth, refreshing tokens that expire within five minutes under the store's per-provider lock. `UserDefaultsCredentialStore` keeps each credential as JSON in the `UserDefaults` you pass, in the same shape as pi's `auth.json`.
-
 ```swift
 let credentials = Credentials(store: UserDefaultsCredentialStore(defaults: .standard))
-try await credentials.login("xai", interaction: AuthInteraction(
-    prompt: { prompt in try await ui.ask(prompt) },   // text, secret, select, or paste-a-code
-    notify: { event in ui.show(event) }               // auth URL, device code, progress
-))
+for try await update in credentials.login("xai") {
+    switch update {
+    case .event(let event, _): ui.show(event)              // auth URL, device code, progress
+    case .prompt(let prompt): ui.ask(prompt)               // reply with prompt.answer(_:) or prompt.cancel()
+    case .promptWithdrawn(let id): ui.dismissPrompt(id)    // the browser finished first
+    }
+}
 for await event in credentials.stream(model: model, context: context) { … }
 ```
 
+- Tokens near expiry are refreshed before each request; a rejected refresh throws `LLMError.signInRequired` from `credentials.auth(for:)`.
+- `signedInProviders()` lists who is signed in; `OAuthCredential.account` is the account's email when the provider returns it.
+- Credentials are stored as pi's `auth.json` entries. Keychain storage is not supported, by design; implement `CredentialStore` for other backends.
+- LLMKit never opens a browser or starts a login on its own. `Credentials.session` carries the built-in flows' requests.
+
 | Provider id | Login | Flow |
 |---|---|---|
-| `anthropic` | Claude Pro/Max | Browser PKCE (loopback or pasted code); requests take the Claude Code identity |
+| `anthropic` | Claude Pro/Max | Browser PKCE (loopback or pasted code) |
 | `openai-codex` | ChatGPT Plus/Pro (Codex) | Browser PKCE on `localhost:1455`, or device code |
 | `openai` | Sign in with ChatGPT | Browser PKCE on `127.0.0.1:1455`; needs `LoginOptions.deviceId` |
-| `github-copilot` | GitHub Copilot | Device code (github.com or Enterprise), then a Copilot token with its own endpoint |
+| `github-copilot` | GitHub Copilot | Device code (github.com or Enterprise) |
 | `xai` | SuperGrok / X Premium | Device code |
 | `kimi-coding` | Kimi Code | Device code |
 | `meta` | Meta Muse | Device code, then a day-long API key |
 | `openrouter` | OpenRouter | Browser PKCE, exchanged for a permanent API key |
-
-Browser flows listen on a loopback port (Network.framework) and also accept a pasted redirect URL, so `prompt` must throw when its task is cancelled: the paste prompt is cancelled when the browser callback wins. Cancelling the login task cancels the flow. LLMKit never logs in, opens a browser, or stores anything on its own.
 
 ## Scope relative to pi-ai
 
@@ -81,7 +83,7 @@ Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket tr
 
 ## Updating the catalog at runtime
 
-`ModelCatalog.builtin` is a bundled snapshot so the package works offline. Apps fetch newer ones from pi-ai's published data on jsDelivr; LLMKit never refreshes by itself, so the app chooses when:
+`ModelCatalog.builtin` is a bundled snapshot. Newer ones come from pi-ai's data on jsDelivr, when the app decides:
 
 ```swift
 let latest = try await ModelCatalog.latestVersion()          // one small request
@@ -100,9 +102,7 @@ Adapters ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`; 
 Scripts/sync-catalog.py <path to pi-ai>/dist/providers/data
 ```
 
-The script also reads https://models.dev/api.json once for provider names and logos; a provider models.dev lacks must be added to its `PROVIDER_OVERRIDES`.
-
-When a provider's behavior changes upstream, review `packages/ai/src/api/` in pi-mono and port the change to the matching file under `Sources/LLMKit/API/`. Login flows live in `packages/ai/src/auth/oauth/` and map to `Sources/LLMKit/Auth/Providers/`.
+Provider names and logos come from models.dev; add missing providers to the script's `PROVIDER_OVERRIDES`. Upstream changes port file-for-file: `packages/ai/src/api/` → `Sources/LLMKit/API/`, `packages/ai/src/auth/oauth/` → `Sources/LLMKit/Auth/Providers/`.
 
 ## License
 

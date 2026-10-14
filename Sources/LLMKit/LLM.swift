@@ -19,7 +19,7 @@ public enum LLM {
                 let transcript = Transcript.normalize(context)
                 var model = model
                 var options = options
-                if options.apiKey == nil, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
+                if options.apiKey?.isEmpty ?? true, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
                     options.apiKey = auth.apiKey
                     options.headers = auth.headers.mapValues(Optional.some).merging(options.headers) { $1 }
                     if let baseURL = auth.baseURL { model.baseURL = baseURL }

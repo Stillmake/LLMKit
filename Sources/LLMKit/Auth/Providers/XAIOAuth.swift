@@ -78,6 +78,6 @@ struct XAIOAuth: OAuthProvider {
         let expiresIn = response.json["expires_in"] == nil ? 3600 : response.positive("expires_in")
         guard let expiresIn else { throw LLMError.auth("Invalid xAI OAuth response field: expires_in") }
         // Refresh five minutes early so a token never dies mid-request.
-        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn - 5 * 60))
+        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn - 5 * 60), extra: OAuthHTTP.account(response))
     }
 }

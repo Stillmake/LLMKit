@@ -5,6 +5,9 @@ import os
 
 /// HTTP, PKCE, device-code polling and the loopback redirect server shared by the OAuth flows.
 enum OAuthHTTP {
+    /// The session login and refresh requests go through; `Credentials` binds its own.
+    @TaskLocal static var session: URLSession = .shared
+
     struct Response: Sendable {
         var status: Int
         var text: String
@@ -44,7 +47,7 @@ enum OAuthHTTP {
             break
         }
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw LLMError.auth("Non-HTTP response from \(url)") }
         return Response(
             status: http.statusCode,
@@ -110,6 +113,22 @@ enum OAuthHTTP {
             return (items?.first { $0.name == "code" }?.value, items?.first { $0.name == "state" }?.value)
         }
         return (value, nil)
+    }
+
+    /// The payload of a JWT, unverified: only for reading claims the issuer just handed us.
+    static func jwtClaims(_ token: String) -> JSONValue? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        let payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        return Data(base64Encoded: payload + String(repeating: "=", count: (4 - payload.count % 4) % 4)).flatMap { try? JSONValue(data: $0) }
+    }
+
+    /// `["account": <email>]` from a token response: Anthropic's `account.email_address`, else the
+    /// OpenID `id_token`'s `email` claim. Empty when the response names no account.
+    static func account(_ response: Response) -> JSONObject {
+        let email = response.json["account"]?["email_address"]?.stringValue
+            ?? response.string("id_token").flatMap { jwtClaims($0)?["email"]?.stringValue }
+        return email.map { ["account": .string($0)] } ?? [:]
     }
 
     static func environment(_ name: String) -> String? {
@@ -243,6 +262,8 @@ final class OAuthCallbackServer<T: Sendable>: @unchecked Sendable {
             listener.newConnectionHandler = { _ in }
             listener.start(queue: queue)
         }
+        // Connections are handled on tasks the listener spawns, outside the login's task locals.
+        let session = OAuthHTTP.session
         let redirect = redirectHost ?? host
         let server = OAuthCallbackServer(
             redirectURI: "http://\(redirect.contains(":") ? "[\(redirect)]" : redirect):\(boundPort)\(path)",
@@ -276,7 +297,7 @@ final class OAuthCallbackServer<T: Sendable>: @unchecked Sendable {
                     return (400, page("Missing authorization code."))
                 }
                 do {
-                    let value = try await complete(query)
+                    let value = try await OAuthHTTP.$session.withValue(session) { try await complete(query) }
                     server.finish(.success(value))
                     return (200, page("Signed in to \(providerName). You may now close this page."))
                 } catch {

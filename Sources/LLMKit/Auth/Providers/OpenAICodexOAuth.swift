@@ -125,14 +125,9 @@ struct OpenAICodexOAuth: OAuthProvider {
         guard let access = response.string("access_token"), let refresh = response.string("refresh_token"),
             let expiresIn = response.json["expires_in"]?.doubleValue
         else { throw LLMError.auth("OpenAI Codex token \(operation) response missing fields: \(response.text)") }
-        let claims = access.split(separator: ".", omittingEmptySubsequences: false)
-        let payload = claims.count == 3
-            ? claims[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") : ""
-        guard claims.count == 3,
-            let data = Data(base64Encoded: payload + String(repeating: "=", count: (4 - payload.count % 4) % 4)),
-            let accountId = (try? JSONValue(data: data))?["https://api.openai.com/auth"]?["chatgpt_account_id"]?.stringValue,
+        guard let accountId = OAuthHTTP.jwtClaims(access)?["https://api.openai.com/auth"]?["chatgpt_account_id"]?.stringValue,
             !accountId.isEmpty
         else { throw LLMError.auth("Failed to extract accountId from token") }
-        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn), extra: ["accountId": .string(accountId)])
+        return OAuthCredential(access: access, refresh: refresh, expires: .now.addingTimeInterval(expiresIn), extra: OAuthHTTP.account(response).merging(["accountId": .string(accountId)]) { $1 })
     }
 }

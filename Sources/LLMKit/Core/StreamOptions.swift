@@ -70,7 +70,7 @@ public struct StreamOptions: Sendable {
     public var maxRetryDelay: Duration
     public var session: URLSession
     /// Resolves request auth before the request is built; set by `Credentials.stream`. Skipped
-    /// when `apiKey` is set. Its headers go under `headers`, and its base URL replaces the model's.
+    /// when `apiKey` is non-empty. Its headers go under `headers`, and its base URL replaces the model's.
     public var resolveAuth: (@Sendable (Model) async throws -> ModelAuth?)?
 
     public init(
