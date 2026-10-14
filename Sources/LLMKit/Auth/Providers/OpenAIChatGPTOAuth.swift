@@ -94,7 +94,7 @@ struct OpenAIChatGPTOAuth: OAuthProvider {
 
     func refresh(_ credential: OAuthCredential) async throws -> OAuthCredential {
         guard let clientId = credential.extra["clientId"]?.stringValue?.trimmingCharacters(in: .whitespaces), !clientId.isEmpty else {
-            throw LLMError.auth("Stored OpenAI OAuth credential does not contain an issued client ID; reconnect ChatGPT")
+            throw OAuthHTTP.Rejected(errorDescription: "Stored OpenAI OAuth credential does not contain an issued client ID; reconnect ChatGPT")
         }
         let response = try await Self.token([
             "grant_type": "refresh_token", "client_id": clientId, "refresh_token": credential.refresh, "resource": Self.resource,
@@ -108,7 +108,7 @@ struct OpenAIChatGPTOAuth: OAuthProvider {
 
     private static func token(_ fields: [String: String]) async throws -> OAuthHTTP.Response {
         let response = try await OAuthHTTP.send("https://auth.openai.com/api/accounts/oauth/token", body: .form(fields))
-        guard response.ok else { throw LLMError.auth("OpenAI OAuth token request failed (\(response.status)): \(response.text)") }
+        guard response.ok else { throw OAuthHTTP.failure("OpenAI OAuth token request failed (\(response.status)): \(response.text)", response) }
         return response
     }
 

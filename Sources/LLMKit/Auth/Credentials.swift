@@ -369,13 +369,14 @@ public struct Credentials: Sendable {
                                 defer { group.cancelAll() }
                                 return try await group.next()!
                             })
-                        } catch let error as URLError {
-                            throw LLMError.auth("OAuth refresh failed for \(provider): \(error.localizedDescription)")
+                        } catch let error as OAuthHTTP.Rejected {
+                            // Only the provider refusing the token means signing in again; outages,
+                            // rate limits, network failures and timeouts are worth retrying.
+                            throw LLMError.signInRequired(provider: provider, message: "OAuth refresh failed for \(provider): \(error.localizedDescription)")
                         } catch LLMError.auth("timed out") {
                             throw LLMError.auth("OAuth refresh timed out for \(provider)")
                         } catch {
-                            // Anything but a network failure or a timeout is the provider refusing the token.
-                            throw LLMError.signInRequired(provider: provider, message: "OAuth refresh failed for \(provider): \(error.localizedDescription)")
+                            throw LLMError.auth("OAuth refresh failed for \(provider): \(error.localizedDescription)")
                         }
                     }
                 }.value

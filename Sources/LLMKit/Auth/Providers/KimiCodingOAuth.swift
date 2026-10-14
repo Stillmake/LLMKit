@@ -76,7 +76,7 @@ struct KimiCodingOAuth: OAuthProvider {
             // The stored credential is dead; the user must sign in again.
             if response.status == 401 || response.status == 403 || response.json["error"]?.stringValue == "invalid_grant" {
                 let description = response.string("error_description").map { ": \($0)" } ?? ""
-                throw LLMError.auth("Kimi Code token refresh unauthorized (status \(response.status))\(description)")
+                throw OAuthHTTP.Rejected(errorDescription: "Kimi Code token refresh unauthorized (status \(response.status))\(description)")
             }
             if response.status == 429 || response.status >= 500, attempt < 3 {
                 lastError = LLMError.auth("Kimi Code token refresh failed with status \(response.status)")

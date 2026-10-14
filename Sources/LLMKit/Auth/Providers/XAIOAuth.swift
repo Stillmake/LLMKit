@@ -60,7 +60,7 @@ struct XAIOAuth: OAuthProvider {
 
     private static func post(_ url: String, _ fields: [String: String], action: String) async throws -> OAuthHTTP.Response {
         let response = try await OAuthHTTP.send(url, body: .form(fields))
-        guard response.ok else { throw LLMError.auth(failure(action, response)) }
+        guard response.ok else { throw OAuthHTTP.failure(failure(action, response), response) }
         return response
     }
 

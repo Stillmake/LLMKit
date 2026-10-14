@@ -101,7 +101,7 @@ struct AnthropicOAuth: OAuthProvider {
 
     private static func token(_ body: JSONObject, action: String) async throws -> OAuthCredential {
         let response = try await OAuthHTTP.send(tokenURL, body: .json(.object(body)))
-        guard response.ok else { throw LLMError.auth("Anthropic \(action) failed. status=\(response.status); body=\(response.text)") }
+        guard response.ok else { throw OAuthHTTP.failure("Anthropic \(action) failed. status=\(response.status); body=\(response.text)", response) }
         guard let access = response.string("access_token"), let refresh = response.string("refresh_token"),
             let expiresIn = response.positive("expires_in")
         else { throw LLMError.auth("Anthropic \(action) returned an invalid response: \(response.text)") }

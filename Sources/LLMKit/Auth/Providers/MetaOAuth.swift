@@ -57,7 +57,7 @@ struct MetaOAuth: OAuthProvider {
             headers: ["Authorization": "Bearer \(identityToken)", "x-api-version": "1.0.0"]
         )
         if response.status == 401 || response.status == 403 {
-            throw LLMError.auth("Meta session expired (status \(response.status)). Sign in again.\(detail(response))")
+            throw OAuthHTTP.Rejected(errorDescription: "Meta session expired (status \(response.status)). Sign in again.\(detail(response))")
         }
         guard response.ok else { throw LLMError.auth("Meta API key mint failed with status \(response.status)\(detail(response))") }
         guard let apiKey = response.string("api_key") else {

@@ -121,7 +121,7 @@ struct OpenAICodexOAuth: OAuthProvider {
     /// Exchanges or refreshes, and keeps the ChatGPT account id from the access token's claims.
     private static func token(_ fields: [String: String], operation: String) async throws -> OAuthCredential {
         let response = try await OAuthHTTP.send(tokenURL, body: .form(fields))
-        guard response.ok else { throw LLMError.auth("OpenAI Codex token \(operation) failed (\(response.status)): \(response.text)") }
+        guard response.ok else { throw OAuthHTTP.failure("OpenAI Codex token \(operation) failed (\(response.status)): \(response.text)", response) }
         guard let access = response.string("access_token"), let refresh = response.string("refresh_token"),
             let expiresIn = response.json["expires_in"]?.doubleValue
         else { throw LLMError.auth("OpenAI Codex token \(operation) response missing fields: \(response.text)") }

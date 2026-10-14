@@ -130,7 +130,9 @@ struct GitHubCopilotOAuth: OAuthProvider {
             method: "GET",
             headers: headers.merging(["Authorization": "Bearer \(githubToken)"]) { $1 }
         )
-        guard response.ok else { throw LLMError.auth("\(response.status) \(HTTPURLResponse.localizedString(forStatusCode: response.status)): \(response.text)") }
+        guard response.ok else {
+            throw OAuthHTTP.failure("\(response.status) \(HTTPURLResponse.localizedString(forStatusCode: response.status)): \(response.text)", response)
+        }
         guard let token = response.json["token"]?.stringValue, let expiresAt = response.json["expires_at"]?.doubleValue else {
             throw LLMError.auth("Invalid Copilot token response fields")
         }

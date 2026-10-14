@@ -20,6 +20,18 @@ enum OAuthHTTP {
         func positive(_ key: String) -> Double? { json[key]?.doubleValue.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
     }
 
+    /// The provider refused the grant or refresh token: the stored credential is dead and only a new
+    /// sign-in helps. `Credentials` reports it as `LLMError.signInRequired`.
+    struct Rejected: LocalizedError {
+        var errorDescription: String?
+    }
+
+    /// `Rejected` for 400, 401, 403 or `invalid_grant`; anything else (5xx, rate limits) is transient.
+    static func failure(_ message: String, _ response: Response) -> any Error {
+        [400, 401, 403].contains(response.status) || response.json["error"]?.stringValue == "invalid_grant"
+            ? Rejected(errorDescription: message) : LLMError.auth(message)
+    }
+
     enum Body: Sendable {
         case form([String: String])
         case json(JSONValue)
