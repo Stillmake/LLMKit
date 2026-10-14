@@ -19,7 +19,11 @@ public enum LLM {
                 let transcript = Transcript.normalize(context)
                 var model = model
                 var options = options
-                if options.apiKey?.isEmpty ?? true, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
+                // The environment is ambient auth: only consulted when no key was passed and no stored
+                // credential owns the provider (pi-ai's resolveProviderAuth).
+                var useEnvironment = options.apiKey == nil
+                if useEnvironment, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
+                    useEnvironment = false
                     options.apiKey = auth.apiKey
                     options.headers = auth.headers.mapValues(Optional.some).merging(options.headers) { $1 }
                     if let baseURL = auth.baseURL { model.baseURL = baseURL }
@@ -30,7 +34,7 @@ public enum LLM {
                 {
                     options.headers["x-opencode-session"] = sessionId
                 }
-                let resolved = ResolvedOptions(model: model, transcript: transcript, options: options)
+                let resolved = ResolvedOptions(model: model, transcript: transcript, options: options, useEnvironment: useEnvironment)
                 switch model.api {
                 case .openAICompletions:
                     try await OpenAICompletions.run(model: model, transcript: transcript, options: resolved, builder: builder)

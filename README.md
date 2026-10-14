@@ -43,7 +43,7 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 - **Compatibility as data.** `ModelCompat` captures per-provider quirks, detected from provider and URL and overridden by the catalog.
 - **`stream` never throws.** Failures end it with `.error`; cancelling the task cancels the request; pre-stream failures are retried, honoring `retry-after`.
 
-API keys come from `StreamOptions.apiKey`, a stored credential, or the provider's environment variable. `ModelCatalog.builtin.providerInfo` gives display names and models.dev logo ids.
+Auth comes from, in order: an explicit `StreamOptions.apiKey` (an override, even when empty), the provider's stored credential (an API key or a sign-in, never both), or its environment variable. `ModelCatalog.builtin.providerInfo` gives display names and models.dev logo ids.
 
 ## Subscription sign-in
 

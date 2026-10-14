@@ -336,14 +336,15 @@ public struct Credentials: Sendable {
     }
 
     /// Request auth for `provider`, refreshing an OAuth token that expires within five minutes.
-    /// `nil` when nothing is stored (or an OAuth credential has no matching provider).
+    /// `nil` only when nothing is stored: a stored credential owns the provider, so one that cannot
+    /// be used throws instead of letting the request fall back to an environment key.
     public func auth(for provider: String) async throws -> ModelAuth? {
         guard let stored = try await store.read(provider) else { return nil }
         switch stored {
         case .apiKey(let key):
             return ModelAuth(apiKey: key)
         case .oauth(var credential):
-            guard let oauth = providers[provider] else { return nil }
+            guard let oauth = providers[provider] else { throw LLMError.auth("No OAuth login for provider \(provider)") }
             let expiresSoon: @Sendable (OAuthCredential) -> Bool = { Date.now.addingTimeInterval(5 * 60) >= $0.expires }
             if expiresSoon(credential) {
                 // The authoritative check runs under the lock, so concurrent callers refresh once.
@@ -380,7 +381,9 @@ public struct Credentials: Sendable {
                         }
                     }
                 }.value
-                guard case .oauth(let refreshed)? = post else { return nil }
+                guard case .oauth(let refreshed)? = post else {
+                    throw LLMError.signInRequired(provider: provider, message: "Signed out of \(provider) while refreshing")
+                }
                 credential = refreshed
             }
             return try oauth.auth(for: credential)
