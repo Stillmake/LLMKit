@@ -16,6 +16,14 @@ enum AnthropicMessages {
         if options.apiKey == nil, !options.hasAuthorizationHeader {
             throw LLMError.missingAPIKey(provider: model.provider)
         }
+        // A Claude Pro/Max OAuth token must present the Claude Code identity: its headers, betas,
+        // system prompt, and Claude Code's canonical tool-name casing.
+        let isOAuth = model.provider != "github-copilot" && options.apiKey?.contains("sk-ant-oat") == true
+        let claudeCodeTools = Dictionary(uniqueKeysWithValues: [
+            "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "KillShell",
+            "NotebookEdit", "Skill", "Task", "TaskOutput", "TodoWrite", "WebFetch", "WebSearch",
+        ].map { ($0.lowercased(), $0) })
+        let wireToolName = { (name: String) in isOAuth ? claudeCodeTools[name.lowercased()] ?? name : name }
 
         let retention = options.raw.cacheRetention
         var cacheControl: JSONValue?
@@ -55,7 +63,7 @@ enum AnthropicMessages {
             thinking = ["type": "disabled"]
         }
 
-        var betas: [String] = []
+        var betas: [String] = isOAuth ? ["claude-code-20250219", "oauth-2025-04-20"] : []
         if !tools.isEmpty, !supportsEagerToolInputStreaming { betas.append("fine-grained-tool-streaming-2025-05-14") }
         if thinking?["type"] == "enabled" { betas.append("interleaved-thinking-2025-05-14") }
 
@@ -65,6 +73,12 @@ enum AnthropicMessages {
         if let apiKey = options.apiKey {
             if model.provider == "github-copilot" {
                 headers["Authorization"] = "Bearer \(apiKey)"
+            } else if isOAuth {
+                headers["Authorization"] = "Bearer \(apiKey)"
+                headers["accept"] = "application/json"
+                headers["anthropic-dangerous-direct-browser-access"] = "true"
+                headers["user-agent"] = "claude-cli/2.1.280"
+                headers["x-app"] = "cli"
             } else {
                 headers["x-api-key"] = apiKey
             }
@@ -119,7 +133,7 @@ enum AnthropicMessages {
                         }
                         return ["type": "thinking", "thinking": .string(thinking.thinking), "signature": .string(thinking.thinkingSignature ?? "")]
                     case .toolCall(let call):
-                        return ["type": "tool_use", "id": .string(call.id), "name": .string(call.name), "input": .object(call.arguments)]
+                        return ["type": "tool_use", "id": .string(call.id), "name": .string(wireToolName(call.name)), "input": .object(call.arguments)]
                     }
                 }
                 if !blocks.isEmpty { wire.append(["role": "assistant", "content": .array(blocks)]) }
@@ -167,10 +181,14 @@ enum AnthropicMessages {
             "max_tokens": .number(Double(maxTokens)),
             "stream": true,
         ]
-        if let system = Transcript.initialSystemMessage(messages)?.promptText, !system.isEmpty {
-            var block: JSONObject = ["type": "text", "text": .string(system)]
-            block["cache_control"] = cacheControl
-            body["system"] = [.object(block)]
+        let systemTexts = (isOAuth ? ["You are Claude Code, Anthropic's official CLI for Claude."] : [])
+            + [Transcript.initialSystemMessage(messages)?.promptText].compactMap { $0.flatMap { $0.isEmpty ? nil : $0 } }
+        if !systemTexts.isEmpty {
+            body["system"] = .array(systemTexts.map { text in
+                var block: JSONObject = ["type": "text", "text": .string(text)]
+                block["cache_control"] = cacheControl
+                return .object(block)
+            })
         }
         // Temperature is incompatible with extended thinking and rejected by newer models.
         if let temperature = options.raw.temperature, options.reasoning == nil, overrides.supportsTemperature ?? true {
@@ -187,7 +205,7 @@ enum AnthropicMessages {
                 inputSchema["properties"] = parameters["properties"] ?? [:]
                 inputSchema["required"] = parameters["required"] ?? []
                 var definition: JSONObject = [
-                    "name": .string(tool.name),
+                    "name": .string(wireToolName(tool.name)),
                     "description": .string(tool.description),
                     "input_schema": .object(inputSchema),
                 ]
@@ -256,9 +274,11 @@ enum AnthropicMessages {
                 case "redacted_thinking":
                     blocks[index] = builder.openThinking("[Reasoning redacted]", signature: block["data"]?.stringValue, redacted: true)
                 case "tool_use":
+                    // Map Claude Code casing back to the caller's tool name.
+                    let name = block["name"]?.stringValue ?? ""
                     blocks[index] = builder.openToolCall(
                         id: block["id"]?.stringValue ?? "",
-                        name: block["name"]?.stringValue ?? "",
+                        name: isOAuth ? tools.first { $0.name.lowercased() == name.lowercased() }?.name ?? name : name,
                         arguments: block["input"]?.objectValue ?? [:]
                     )
                 case "fallback" where builder.blocks.isEmpty:

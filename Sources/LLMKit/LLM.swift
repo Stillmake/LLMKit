@@ -17,7 +17,13 @@ public enum LLM {
             let builder = ResponseBuilder(model: model, continuation: continuation)
             do {
                 let transcript = Transcript.normalize(context)
+                var model = model
                 var options = options
+                if options.apiKey == nil, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
+                    options.apiKey = auth.apiKey
+                    options.headers = auth.headers.mapValues(Optional.some).merging(options.headers) { $1 }
+                    if let baseURL = auth.baseURL { model.baseURL = baseURL }
+                }
                 // OpenCode routes each conversation by a required session header (pi-ai's opencode-headers).
                 if ["opencode", "opencode-go"].contains(model.provider), let sessionId = options.sessionId,
                     !options.headers.keys.contains(where: { $0.lowercased() == "x-opencode-session" })

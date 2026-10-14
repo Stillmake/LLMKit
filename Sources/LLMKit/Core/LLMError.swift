@@ -10,13 +10,15 @@ public enum LLMError: Error, LocalizedError, Sendable {
     /// The provider reported a failure inside an otherwise successful stream.
     case provider(String)
     case invalidRequest(String)
+    /// Login, credential storage or token refresh failed.
+    case auth(String)
 
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey(let provider): "No API key for provider: \(provider)"
         case .unsupportedAPI(let api): "No adapter for API: \(api)"
         case .http(let status, let message, _): "\(status) \(message)"
-        case .protocolViolation(let message), .provider(let message), .invalidRequest(let message): message
+        case .protocolViolation(let message), .provider(let message), .invalidRequest(let message), .auth(let message): message
         }
     }
 }

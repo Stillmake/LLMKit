@@ -69,6 +69,9 @@ public struct StreamOptions: Sendable {
     /// Longest server-requested retry delay to honor; longer requests fail immediately. `.zero` disables the cap.
     public var maxRetryDelay: Duration
     public var session: URLSession
+    /// Resolves request auth before the request is built; set by `Credentials.stream`. Skipped
+    /// when `apiKey` is set. Its headers go under `headers`, and its base URL replaces the model's.
+    public var resolveAuth: (@Sendable (Model) async throws -> ModelAuth?)?
 
     public init(
         apiKey: String? = nil,
@@ -92,7 +95,8 @@ public struct StreamOptions: Sendable {
         timeout: Duration = .seconds(600),
         maxRetries: Int = 2,
         maxRetryDelay: Duration = .seconds(60),
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        resolveAuth: (@Sendable (Model) async throws -> ModelAuth?)? = nil
     ) {
         self.apiKey = apiKey
         self.headers = headers
@@ -116,6 +120,7 @@ public struct StreamOptions: Sendable {
         self.maxRetries = maxRetries
         self.maxRetryDelay = maxRetryDelay
         self.session = session
+        self.resolveAuth = resolveAuth
     }
 }
 

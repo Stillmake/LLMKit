@@ -45,13 +45,39 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 
 `ModelCatalog.builtin.providerInfo` gives each provider's display name and models.dev logo id (`https://models.dev/logos/<logo>.svg`).
 
-API keys come from `StreamOptions.apiKey`, or from the provider's environment variable (`APIKeyEnvironment.apiKeyVariables`).
+API keys come from `StreamOptions.apiKey`, from a stored credential (see below), or from the provider's environment variable (`APIKeyEnvironment.apiKeyVariables`).
+
+## Subscription sign-in
+
+`Credentials` runs a provider's OAuth login, stores the result in a `CredentialStore`, and resolves request auth, refreshing tokens that expire within five minutes under the store's per-provider lock. `UserDefaultsCredentialStore` keeps each credential as JSON in the `UserDefaults` you pass, in the same shape as pi's `auth.json`.
+
+```swift
+let credentials = Credentials(store: UserDefaultsCredentialStore(defaults: .standard))
+try await credentials.login("xai", interaction: AuthInteraction(
+    prompt: { prompt in try await ui.ask(prompt) },   // text, secret, select, or paste-a-code
+    notify: { event in ui.show(event) }               // auth URL, device code, progress
+))
+for await event in credentials.stream(model: model, context: context) { … }
+```
+
+| Provider id | Login | Flow |
+|---|---|---|
+| `anthropic` | Claude Pro/Max | Browser PKCE (loopback or pasted code); requests take the Claude Code identity |
+| `openai-codex` | ChatGPT Plus/Pro (Codex) | Browser PKCE on `localhost:1455`, or device code |
+| `openai` | Sign in with ChatGPT | Browser PKCE on `127.0.0.1:1455`; needs `LoginOptions.deviceId` |
+| `github-copilot` | GitHub Copilot | Device code (github.com or Enterprise), then a Copilot token with its own endpoint |
+| `xai` | SuperGrok / X Premium | Device code |
+| `kimi-coding` | Kimi Code | Device code |
+| `meta` | Meta Muse | Device code, then a day-long API key |
+| `openrouter` | OpenRouter | Browser PKCE, exchanged for a permanent API key |
+
+Browser flows listen on a loopback port (Network.framework) and also accept a pasted redirect URL, so `prompt` must throw when its task is cancelled: the paste prompt is cancelled when the browser callback wins. Cancelling the login task cancels the flow. LLMKit never logs in, opens a browser, or stores anything on its own.
 
 ## Scope relative to pi-ai
 
 Ported: the five adapters above, `transform-messages`, transcript system-message replay, the compat schema and detection, thinking-level mapping and budgets, prompt caching, strict JSON-schema tools, usage and cost (including tiers and service tiers), retries, and the model catalog.
 
-Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket transport, OpenAI grammar (custom) tools, mid-conversation tool additions and effort messages, Anthropic server-side fallbacks, OAuth login flows, and image generation and classifiers.
+Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket transport, OpenAI grammar (custom) tools, mid-conversation tool additions and effort messages, Anthropic server-side fallbacks, the Radius gateway login, and image generation and classifiers.
 
 ## Updating the catalog at runtime
 
@@ -68,7 +94,7 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-Ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`. The catalog comes from `@earendil-works/pi-ai` 1.2.0. To refresh it:
+Adapters ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`; OAuth login flows (`Sources/LLMKit/Auth/`) and the Claude OAuth request handling from `7efebff189ddc4077b332e1552fff899ed387d28`. The catalog comes from `@earendil-works/pi-ai` 1.2.0. To refresh it:
 
 ```sh
 Scripts/sync-catalog.py <path to pi-ai>/dist/providers/data
@@ -76,7 +102,7 @@ Scripts/sync-catalog.py <path to pi-ai>/dist/providers/data
 
 The script also reads https://models.dev/api.json once for provider names and logos; a provider models.dev lacks must be added to its `PROVIDER_OVERRIDES`.
 
-When a provider's behavior changes upstream, review `packages/ai/src/api/` in pi-mono and port the change to the matching file under `Sources/LLMKit/API/`.
+When a provider's behavior changes upstream, review `packages/ai/src/api/` in pi-mono and port the change to the matching file under `Sources/LLMKit/API/`. Login flows live in `packages/ai/src/auth/oauth/` and map to `Sources/LLMKit/Auth/Providers/`.
 
 ## License
 
