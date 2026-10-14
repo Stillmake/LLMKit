@@ -197,7 +197,7 @@ import Testing
 
     @Test func deepSeekRequestUsesDetectedCompat() throws {
         let messages = Transcript.normalize(Context(systemPrompt: "Be brief.", messages: [.user(UserMessage("hi"))]))
-        let options = ResolvedOptions(model: deepseek, transcript: messages, options: StreamOptions(apiKey: "k", reasoning: .high))
+        let options = ResolvedOptions(model: deepseek, transcript: messages, options: StreamOptions(apiKey: "k", reasoning: .high), useEnvironment: false)
         let body = try OpenAICompletions.requestBody(model: deepseek, messages: messages, options: options, compat: .init(model: deepseek))
         #expect(body["max_tokens"] == 8192)
         #expect(body["max_completion_tokens"] == nil)

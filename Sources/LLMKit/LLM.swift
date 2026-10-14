@@ -19,11 +19,12 @@ public enum LLM {
                 let transcript = Transcript.normalize(context)
                 var model = model
                 var options = options
-                // The environment is ambient auth: only consulted when no key was passed and no stored
-                // credential owns the provider (pi-ai's resolveProviderAuth).
-                var useEnvironment = options.apiKey == nil
-                if useEnvironment, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
-                    useEnvironment = false
+                // The environment is ambient auth, as in pi-ai's resolveProviderAuth and envApiKeyAuth: an
+                // explicit key skips the stored credential, a stored sign-in owns the provider, and only a
+                // missing or empty key falls through to the environment.
+                var useEnvironment = options.apiKey?.isEmpty ?? true
+                if options.apiKey == nil, let resolveAuth = options.resolveAuth, let auth = try await resolveAuth(model) {
+                    useEnvironment = auth.apiKey?.isEmpty == true
                     options.apiKey = auth.apiKey
                     options.headers = auth.headers.mapValues(Optional.some).merging(options.headers) { $1 }
                     if let baseURL = auth.baseURL { model.baseURL = baseURL }

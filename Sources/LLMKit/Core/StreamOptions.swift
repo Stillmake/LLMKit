@@ -71,8 +71,9 @@ public struct StreamOptions: Sendable {
     public var session: URLSession
     /// Resolves request auth before the request is built; set by `Credentials.stream`. Skipped
     /// whenever `apiKey` is set, even to an empty string: an explicit key is an override and never
-    /// falls back to a stored credential (pi-ai's `AuthResolutionOverrides.apiKey`). Its headers go
-    /// under `headers`, and its base URL replaces the model's.
+    /// falls back to a stored credential (pi-ai's `AuthResolutionOverrides.apiKey`); an empty one
+    /// still reads the environment, as pi-ai's `envApiKeyAuth` does. Its headers go under `headers`,
+    /// and its base URL replaces the model's.
     public var resolveAuth: (@Sendable (Model) async throws -> ModelAuth?)?
 
     public init(
@@ -139,10 +140,9 @@ struct ResolvedOptions {
     /// Model defaults, then thinking-level overrides, then request values.
     var samplingParams: JSONObject?
 
-    /// An empty explicit key stays missing: it never turns into the environment's key.
     init(model: Model, transcript: [Message], options: StreamOptions, useEnvironment: Bool) {
         raw = options
-        apiKey = options.apiKey.map { $0.isEmpty ? nil : $0 } ?? (useEnvironment ? APIKeyEnvironment.apiKey(for: model.provider) : nil)
+        apiKey = options.apiKey.flatMap { $0.isEmpty ? nil : $0 } ?? (useEnvironment ? APIKeyEnvironment.apiKey(for: model.provider) : nil)
         let clamped = options.reasoning.map(model.clampThinkingLevel) ?? .off
         reasoning = clamped == .off ? nil : clamped
         // pi-ai's clampMaxTokensToContext: keep a safety margin under the context window.
