@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="LLMKit: one Swift API for 40 LLM providers" width="1280">
+</p>
+
 # LLMKit
 
 One Swift API for streaming, tool calls, and reasoning across OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter and 30+ providers.
