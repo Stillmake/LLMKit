@@ -73,7 +73,7 @@ enum Transcript {
     /// Prepares stored history for `model`:
     /// - replaces images with placeholders when the model has no image input;
     /// - keeps provider-opaque data (signatures, redacted thinking) only for the model that produced
-    ///   it, turning foreign thinking into plain text;
+    ///   it, and drops thinking from other models;
     /// - rewrites tool-call ids via `normalizeToolCallId` for foreign assistant messages, and the
     ///   matching tool results;
     /// - drops errored or aborted assistant turns;
@@ -105,10 +105,10 @@ enum Transcript {
                 assistant.content = assistant.content.compactMap { block in
                     switch block {
                     case .thinking(let thinking):
-                        if thinking.redacted { return isSameModel ? block : nil }
-                        if isSameModel, thinking.thinkingSignature != nil { return block }
-                        if thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-                        return isSameModel ? block : .text(TextContent(thinking.thinking))
+                        // Readable thinking sent as text would read as part of the visible reply.
+                        guard isSameModel else { return nil }
+                        if thinking.redacted || thinking.thinkingSignature != nil { return block }
+                        return thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : block
                     case .text(let text):
                         return isSameModel ? block : .text(TextContent(text.text))
                     case .toolCall(var call):
@@ -169,7 +169,7 @@ enum Transcript {
         return result
     }
 
-    private static func replacingImages(_ content: [UserContent], placeholder: String) -> [UserContent] {
+    static func replacingImages(_ content: [UserContent], placeholder: String) -> [UserContent] {
         var result: [UserContent] = []
         for block in content {
             switch block {

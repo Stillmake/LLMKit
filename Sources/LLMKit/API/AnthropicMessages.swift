@@ -139,8 +139,19 @@ enum AnthropicMessages {
                 if !blocks.isEmpty { wire.append(["role": "assistant", "content": .array(blocks)]) }
 
             case .toolResult:
+                func imageBlock(_ image: ImageContent) -> JSONValue {
+                    ["type": "image", "source": ["type": "base64", "media_type": .string(image.mimeType), "data": .string(image.data)]]
+                }
                 var results: [JSONValue] = []
-                while index < transformed.count, case .toolResult(let result) = transformed[index] {
+                // Anthropic rejects error tool results that contain anything but text, so their images follow
+                // all tool results of the turn, which must come first in the user message (#10794).
+                var errorImages: [JSONValue] = []
+                while index < transformed.count, case .toolResult(var result) = transformed[index] {
+                    if result.isError, !result.images.isEmpty {
+                        errorImages.append(["type": "text", "text": .string("Images from the error result of tool call \(result.toolCallId) (\(result.toolName)):")])
+                        errorImages += result.images.map(imageBlock)
+                        result.content = Transcript.replacingImages(result.content, placeholder: "(image attached after the tool results)")
+                    }
                     let content: JSONValue
                     if result.images.isEmpty {
                         content = .string(result.text)
@@ -148,8 +159,7 @@ enum AnthropicMessages {
                         let blocks: [JSONValue] = result.content.map { block in
                             switch block {
                             case .text(let text): ["type": "text", "text": .string(text.text)]
-                            case .image(let image):
-                                ["type": "image", "source": ["type": "base64", "media_type": .string(image.mimeType), "data": .string(image.data)]]
+                            case .image(let image): imageBlock(image)
                             }
                         }
                         content = .array(blocks.contains { $0["type"] == "text" } ? blocks : [["type": "text", "text": "(see attached image)"]] + blocks)
@@ -157,7 +167,7 @@ enum AnthropicMessages {
                     results.append(["type": "tool_result", "tool_use_id": .string(result.toolCallId), "content": content, "is_error": .bool(result.isError)])
                     index += 1
                 }
-                wire.append(["role": "user", "content": .array(results)])
+                wire.append(["role": "user", "content": .array(results + errorImages)])
                 continue
             }
             index += 1

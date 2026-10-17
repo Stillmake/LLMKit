@@ -51,13 +51,24 @@ public struct ToolCall: Codable, Sendable, Hashable, Identifiable {
     public var thoughtSignature: String?
     /// OpenAI Responses namespace for namespaced tools.
     public var namespace: String?
+    /// Set when the model's complete arguments text was not a valid JSON object; `arguments` is then
+    /// empty. Describes the problem and includes the text the model sent.
+    public var argumentsError: String?
 
-    public init(id: String, name: String, arguments: JSONObject, thoughtSignature: String? = nil, namespace: String? = nil) {
+    public init(
+        id: String,
+        name: String,
+        arguments: JSONObject,
+        thoughtSignature: String? = nil,
+        namespace: String? = nil,
+        argumentsError: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.arguments = arguments
         self.thoughtSignature = thoughtSignature
         self.namespace = namespace
+        self.argumentsError = argumentsError
     }
 }
 

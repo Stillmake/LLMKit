@@ -64,7 +64,7 @@ import Testing
         return .assistant(message)
     }
 
-    @Test func foreignThinkingBecomesTextAndSignaturesDrop() {
+    @Test func foreignThinkingAndSignaturesDrop() {
         let history: [Message] = [
             .user(UserMessage("hi")),
             assistant(from: gpt, [
@@ -77,7 +77,7 @@ import Testing
             Issue.record("assistant message dropped")
             return
         }
-        #expect(replayed.content == [.text(TextContent("plan")), .text(TextContent("hello"))])
+        #expect(replayed.content == [.text(TextContent("hello"))])
     }
 
     @Test func orphanedToolCallsGetSyntheticResultsAndIdsAreRemapped() {

@@ -60,7 +60,8 @@ target.write_text(json.dumps(
 ) + "\n")
 print(f"{len(models)} models -> {target}")
 
-with urllib.request.urlopen("https://models.dev/api.json") as response:
+# models.dev answers 403 to urllib's default User-Agent.
+with urllib.request.urlopen(urllib.request.Request("https://models.dev/api.json", headers={"User-Agent": "curl/8"})) as response:
     models_dev = json.load(response)
 providers = {}
 for provider in sorted({model["provider"] for model in models}):

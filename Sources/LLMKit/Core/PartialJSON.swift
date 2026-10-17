@@ -16,6 +16,65 @@ public enum PartialJSON {
         return parser.parseValue()?.objectValue ?? [:]
     }
 
+    /// Parses the complete arguments text of a finished tool call, as pi-ai's `parseToolCallArguments`.
+    ///
+    /// Unlike `parseObject`, this never keeps a partially parsed prefix: text that is not a valid
+    /// JSON object (after `repairJson`) yields empty arguments and an error that includes the text.
+    public static func parseToolCallArguments(_ text: String) -> (arguments: JSONObject, error: String?) {
+        guard !text.allSatisfy(\.isWhitespace) else { return ([:], nil) }
+        let message: String
+        do {
+            let value = try (try? JSONValue(parsing: text)) ?? JSONValue(parsing: repair(text))
+            if case .object(let object) = value { return (object, nil) }
+            message = "Tool arguments must be a JSON object"
+        } catch {
+            message = error.localizedDescription
+        }
+        return ([:], "\(message)\n\nReceived arguments:\n\(text)")
+    }
+
+    /// Escapes raw control characters inside strings and doubles backslashes before invalid
+    /// escapes, as pi-ai's `repairJson`.
+    static func repair(_ json: String) -> String {
+        let scalars = Array(json.unicodeScalars)
+        var repaired = String.UnicodeScalarView()
+        var inString = false
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            index += 1
+            guard inString else {
+                repaired.append(scalar)
+                inString = scalar == "\""
+                continue
+            }
+            switch scalar {
+            case "\"":
+                repaired.append(scalar)
+                inString = false
+            case "\\":
+                let next = index < scalars.count ? scalars[index] : nil
+                if next == "u", index + 5 <= scalars.count, scalars[index + 1..<index + 5].allSatisfy(\.properties.isASCIIHexDigit) {
+                    repaired.append(contentsOf: scalars[index - 1..<index + 5])
+                    index += 5
+                } else if let next, "\"\\/bfnrt".unicodeScalars.contains(next) {
+                    repaired.append(contentsOf: ["\\", next])
+                    index += 1
+                } else {
+                    repaired.append(contentsOf: "\\\\".unicodeScalars)
+                }
+            case "\u{08}": repaired.append(contentsOf: "\\b".unicodeScalars)
+            case "\u{0C}": repaired.append(contentsOf: "\\f".unicodeScalars)
+            case "\n": repaired.append(contentsOf: "\\n".unicodeScalars)
+            case "\r": repaired.append(contentsOf: "\\r".unicodeScalars)
+            case "\t": repaired.append(contentsOf: "\\t".unicodeScalars)
+            case "\u{00}"..."\u{1F}": repaired.append(contentsOf: String(format: "\\u%04x", scalar.value).unicodeScalars)
+            default: repaired.append(scalar)
+            }
+        }
+        return String(repaired)
+    }
+
     private struct Parser {
         let bytes: [UInt8]
         var position = 0

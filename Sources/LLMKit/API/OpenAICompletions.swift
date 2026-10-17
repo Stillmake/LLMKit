@@ -158,12 +158,8 @@ enum OpenAICompletions {
             }
             guard let delta = choice["delta"]?.objectValue else { continue }
 
-            if let content = delta["content"]?.stringValue, !content.isEmpty {
-                let block = textBlock ?? builder.openText()
-                textBlock = block
-                builder.appendText(content, to: block)
-            }
-
+            // Reasoning precedes content: some proxies (LiteLLM) send both in one delta, and the
+            // thinking block must come before the text block.
             // Servers name the reasoning field differently; some send the same text under two names.
             if let field = reasoningFields.first(where: { !(delta[$0]?.stringValue ?? "").isEmpty }),
                 let reasoning = delta[field]?.stringValue
@@ -172,23 +168,6 @@ enum OpenAICompletions {
                 let block = thinkingBlock ?? builder.openThinking(signature: signature)
                 thinkingBlock = block
                 builder.appendText(reasoning, to: block)
-            }
-
-            for toolDelta in delta["tool_calls"]?.arrayValue ?? [] {
-                let streamIndex = toolDelta["index"]?.intValue
-                let id = toolDelta["id"]?.stringValue
-                let name = toolDelta["function"]?["name"]?.stringValue
-                let block = streamIndex.flatMap { toolBlocksByIndex[$0] } ?? id.flatMap { toolBlocksById[$0] }
-                    ?? builder.openToolCall(id: id ?? "", name: name ?? "")
-                if let streamIndex { toolBlocksByIndex[streamIndex] = block }
-                if let id, !id.isEmpty {
-                    toolBlocksById[id] = block
-                    if block.toolCallId.isEmpty { block.toolCallId = id }
-                }
-                if block.toolName.isEmpty, let name { block.toolName = name }
-                if let arguments = toolDelta["function"]?["arguments"]?.stringValue {
-                    builder.appendToolArguments(arguments, to: block)
-                }
             }
 
             // OpenRouter streams structured reasoning replay data as deltas: consecutive text and
@@ -216,6 +195,29 @@ enum OpenAICompletions {
                     details.append(entry)
                 }
                 reasoningDetails = details
+            }
+
+            if let content = delta["content"]?.stringValue, !content.isEmpty {
+                let block = textBlock ?? builder.openText()
+                textBlock = block
+                builder.appendText(content, to: block)
+            }
+
+            for toolDelta in delta["tool_calls"]?.arrayValue ?? [] {
+                let streamIndex = toolDelta["index"]?.intValue
+                let id = toolDelta["id"]?.stringValue
+                let name = toolDelta["function"]?["name"]?.stringValue
+                let block = streamIndex.flatMap { toolBlocksByIndex[$0] } ?? id.flatMap { toolBlocksById[$0] }
+                    ?? builder.openToolCall(id: id ?? "", name: name ?? "")
+                if let streamIndex { toolBlocksByIndex[streamIndex] = block }
+                if let id, !id.isEmpty {
+                    toolBlocksById[id] = block
+                    if block.toolCallId.isEmpty { block.toolCallId = id }
+                }
+                if block.toolName.isEmpty, let name { block.toolName = name }
+                if let arguments = toolDelta["function"]?["arguments"]?.stringValue {
+                    builder.appendToolArguments(arguments, to: block)
+                }
             }
         }
 
@@ -561,7 +563,7 @@ enum OpenAICompletions {
                     let hasImages = !result.images.isEmpty
                     var toolMessage: JSONObject = [
                         "role": "tool",
-                        "content": .string((text.isEmpty ? (hasImages ? "(see attached image)" : "(no tool output)") : text)),
+                        "content": .string((text.allSatisfy(\.isWhitespace) ? (hasImages ? "(see attached image)" : "(no tool output)") : text)),
                         "tool_call_id": .string(result.toolCallId),
                     ]
                     if compat.requiresToolResultName, !result.toolName.isEmpty { toolMessage["name"] = .string(result.toolName) }

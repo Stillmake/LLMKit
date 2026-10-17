@@ -100,10 +100,16 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-Adapters ported from pi-mono commit `7d75a0e3eb273dff753d49c066ea29fbe7b3b6f6`; OAuth login flows (`Sources/LLMKit/Auth/`) and the Claude OAuth request handling from `7efebff189ddc4077b332e1552fff899ed387d28`. The catalog comes from `@earendil-works/pi-ai` 1.2.0. To refresh it:
+Adapters ported from pi-mono commit `8efd314fa3d3232ce197d8d7a6a5660530b9d83e`; OAuth login flows (`Sources/LLMKit/Auth/`) unchanged through that commit. The catalog comes from `@earendil-works/pi-ai` 1.3.0.
+
+Keep the upstream sources in the git-ignored `upstream/` folder so they are fetched once and updated in place:
 
 ```sh
-Scripts/sync-catalog.py <path to pi-ai>/dist/providers/data
+git clone https://github.com/badlogic/pi-mono upstream/pi-mono   # later: git -C upstream/pi-mono pull
+git -C upstream/pi-mono diff <ported commit> HEAD -- packages/ai/src
+
+mkdir -p upstream/pi-ai && (cd upstream/pi-ai && npm pack @earendil-works/pi-ai@<version> && tar xzf *.tgz)
+Scripts/sync-catalog.py upstream/pi-ai/package/dist/providers/data
 ```
 
 Provider names and logos come from models.dev; add missing providers to the script's `PROVIDER_OVERRIDES`. Upstream changes port file-for-file: `packages/ai/src/api/` → `Sources/LLMKit/API/`, `packages/ai/src/auth/oauth/` → `Sources/LLMKit/Auth/Providers/`.

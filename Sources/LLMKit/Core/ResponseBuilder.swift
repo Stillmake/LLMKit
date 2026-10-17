@@ -19,6 +19,7 @@ final class ResponseBuilder {
         var arguments: JSONObject = [:]
         var thoughtSignature: String?
         var namespace: String?
+        var argumentsError: String?
         var isClosed = false
 
         init(kind: Kind, index: Int, text: String) {
@@ -28,7 +29,14 @@ final class ResponseBuilder {
         }
 
         var toolCall: ToolCall {
-            ToolCall(id: toolCallId, name: toolName, arguments: arguments, thoughtSignature: thoughtSignature, namespace: namespace)
+            ToolCall(
+                id: toolCallId,
+                name: toolName,
+                arguments: arguments,
+                thoughtSignature: thoughtSignature,
+                namespace: namespace,
+                argumentsError: argumentsError
+            )
         }
 
         var content: AssistantContent {
@@ -127,8 +135,8 @@ final class ResponseBuilder {
 
     // MARK: Closing
 
-    /// Emits the authoritative `*End` event. Tool-call arguments are parsed from the streamed JSON
-    /// when any arrived, otherwise the arguments given at open are kept.
+    /// Emits the authoritative `*End` event. Tool-call arguments are parsed strictly from the
+    /// streamed JSON when any arrived, otherwise the arguments given at open are kept.
     func close(_ block: Block) {
         guard !block.isClosed else { return }
         block.isClosed = true
@@ -141,7 +149,9 @@ final class ResponseBuilder {
                 content: ThinkingContent(block.text, thinkingSignature: block.signature, redacted: block.redacted)
             ))
         case .toolCall:
-            if !block.text.isEmpty { block.arguments = PartialJSON.parseObject(block.text) }
+            if !block.text.isEmpty {
+                (block.arguments, block.argumentsError) = PartialJSON.parseToolCallArguments(block.text)
+            }
             continuation.yield(.toolCallEnd(index: block.index, toolCall: block.toolCall))
         }
     }

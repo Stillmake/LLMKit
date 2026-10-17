@@ -18,7 +18,7 @@ enum GoogleGenerativeAI {
         if model.reasoning {
             // Gemini 3 and Gemma 4 take a discrete level; Gemini 2.5 takes a token budget.
             let id = model.id.lowercased()
-            let usesThinkingLevel = id.contains(/gemini-3(?:\.\d+)?-(?:pro|flash)/)
+            let usesThinkingLevel = id.contains(/gemini-3(?:\.\d+)?-(?:pro|flash)/) || id.contains(/gemini-(?:[4-9]|[1-9]\d)/)
                 || id == "gemini-flash-latest" || id == "gemini-flash-lite-latest" || id.contains(/gemma-?4/)
             func googleLevel(_ level: ThinkingLevel) throws -> String {
                 let mapped: String = if case .value(let value)? = model.thinkingLevelMap?[level] { value.lowercased() } else { level.rawValue }
@@ -127,7 +127,7 @@ enum GoogleGenerativeAI {
             case .toolResult(let result):
                 let text = result.text
                 let images = model.supportsImages ? result.images : []
-                let value: JSONValue = .string(!text.isEmpty ? text : images.isEmpty ? "" : "(see attached image)")
+                let value: JSONValue = .string(!text.allSatisfy(\.isWhitespace) ? text : images.isEmpty ? "" : "(see attached image)")
                 let imageParts: [JSONValue] = images.map { ["inlineData": ["mimeType": .string($0.mimeType), "data": .string($0.data)]] }
                 var response: JSONObject = [
                     "name": .string(result.toolName),

@@ -124,7 +124,7 @@ enum OpenAIResponsesShared {
                 let callId = String(result.toolCallId.prefix { $0 != "|" })
                 let output: JSONValue
                 if result.images.isEmpty || !model.supportsImages {
-                    output = .string(result.text.isEmpty ? (result.images.isEmpty ? "(no tool output)" : "(see attached image)") : result.text)
+                    output = .string(result.text.allSatisfy(\.isWhitespace) ? (result.images.isEmpty ? "(no tool output)" : "(see attached image)") : result.text)
                 } else {
                     output = .array((result.text.isEmpty ? [] : [["type": "input_text", "text": .string(result.text)]])
                         + result.images.map { ["type": "input_image", "detail": "auto", "image_url": .string("data:\($0.mimeType);base64,\($0.data)")] })
