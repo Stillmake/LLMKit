@@ -112,7 +112,7 @@ mkdir -p upstream/pi-ai && (cd upstream/pi-ai && npm pack @earendil-works/pi-ai@
 Scripts/sync-catalog.py upstream/pi-ai/package/dist/providers/data
 ```
 
-Bump the pi-ai version in `ClientIdentity`'s detailed `User-Agent` to match the catalog. Provider names and logos come from models.dev; add missing providers to the script's `PROVIDER_OVERRIDES`. Upstream changes port file-for-file: `packages/ai/src/api/` → `Sources/LLMKit/API/`, `packages/ai/src/auth/oauth/` → `Sources/LLMKit/Auth/Providers/`.
+Bump the pi-ai version in `ClientIdentity`'s detailed `User-Agent` to match the catalog. Provider names and logos come from models.dev; add missing providers to the script's `PROVIDER_OVERRIDES`. Upstream changes port file-for-file: `packages/ai/src/api/` → `Sources/LLMKit/API/`, `packages/ai/src/auth/oauth/` → `Sources/LLMKit/Auth/Providers/`. Run `swift test` before committing a sync.
 
 ## License
 
