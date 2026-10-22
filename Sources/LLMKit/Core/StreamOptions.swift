@@ -32,6 +32,9 @@ public struct StreamOptions: Sendable {
     public var apiKey: String?
     /// Extra HTTP headers, applied last. A `nil` value removes a default header.
     public var headers: [String: String?]
+    /// How the request identifies the calling app: `User-Agent` and provider attribution headers.
+    /// `nil` uses pi-ai's defaults: a detailed `User-Agent` and no attribution.
+    public var identity: ClientIdentity?
     public var temperature: Double?
     /// Output token cap. Defaults to the model's limit, clamped to the room left in the context window.
     public var maxTokens: Int?
@@ -79,6 +82,7 @@ public struct StreamOptions: Sendable {
     public init(
         apiKey: String? = nil,
         headers: [String: String?] = [:],
+        identity: ClientIdentity? = nil,
         temperature: Double? = nil,
         maxTokens: Int? = nil,
         reasoning: ThinkingLevel? = nil,
@@ -103,6 +107,7 @@ public struct StreamOptions: Sendable {
     ) {
         self.apiKey = apiKey
         self.headers = headers
+        self.identity = identity
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.reasoning = reasoning

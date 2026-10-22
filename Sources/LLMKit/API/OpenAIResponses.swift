@@ -88,11 +88,25 @@ enum OpenAIResponses {
 
         let payload = options.finalize(&body, model: model, applySamplingParams: true)
         let url = try HTTP.url(model.baseURL, path: "/responses")
-        let bytes = try await HTTP.send(
-            HTTP.request(url: url, body: payload, headers: headers, model: model, options: options),
-            model: model,
-            options: options
-        )
+        // Sign in with ChatGPT shares the subscription's usage limit with other apps; on ChatGPT
+        // Business plans, the workspace admin also sets a per-user limit. Both reset after hours.
+        let usageLimitHints = [
+            "subscription_sharing_usage_limit_exceeded": "Check your ChatGPT usage: https://chatgpt.com/settings/usage",
+            "subscription_sharing_workplace_individual_usage_limit_exceeded":
+                "You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.",
+        ]
+        let bytes: URLSession.AsyncBytes
+        do {
+            bytes = try await HTTP.send(
+                HTTP.request(url: url, body: payload, headers: headers, model: model, options: options),
+                model: model,
+                options: options,
+                isRetryable: { _, body in !usageLimitHints.keys.contains { body.contains($0) } }
+            )
+        } catch LLMError.http(let status, let message, let responseHeaders) {
+            let hint = usageLimitHints.first { message.contains($0.key) }?.value
+            throw LLMError.http(status: status, message: hint.map { "\(message)\n\($0)" } ?? message, headers: responseHeaders)
+        }
         builder.start()
         try await OpenAIResponsesShared.process(
             HTTP.jsonEvents(bytes).map { $0.json },
@@ -128,7 +142,8 @@ enum OpenAICodexResponses {
         let sessionId = options.raw.cacheRetention == .none ? nil : options.raw.sessionId
 
         var headers: [String: String?] = [
-            "originator": "llmkit",
+            // Codex expects an originator on every request; it is not attribution.
+            "originator": "pi",
             "Authorization": "Bearer \(token)",
             "chatgpt-account-id": accountId,
             "OpenAI-Beta": "responses=experimental",

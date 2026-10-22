@@ -93,7 +93,7 @@ enum HTTP {
         return url
     }
 
-    /// Builds a JSON POST. Header precedence: LLMKit defaults, adapter defaults, model headers,
+    /// Builds a JSON POST. Header precedence: identity and LLMKit defaults, adapter defaults, model headers,
     /// caller headers (where `nil` removes); names compare case-insensitively.
     static func request(
         url: URL,
@@ -104,7 +104,8 @@ enum HTTP {
     ) -> URLRequest {
         var merged: [String: (name: String, value: String)] = [:]
         let layers: [[String: String?]] = [
-            ["User-Agent": "LLMKit", "Content-Type": "application/json", "Accept": "text/event-stream"],
+            (options.raw.identity ?? ClientIdentity()).headers(for: model).mapValues(Optional.some)
+                .merging(["Content-Type": "application/json", "Accept": "text/event-stream"]) { $1 },
             headers,
             (model.headers ?? [:]).mapValues(Optional.some),
             options.raw.headers,

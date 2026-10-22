@@ -29,11 +29,11 @@ public enum LLM {
                     options.headers = auth.headers.mapValues(Optional.some).merging(options.headers) { $1 }
                     if let baseURL = auth.baseURL { model.baseURL = baseURL }
                 }
-                // OpenCode routes each conversation by a required session header (pi-ai's opencode-headers).
-                if ["opencode", "opencode-go"].contains(model.provider), let sessionId = options.sessionId,
+                // OpenCode routes each conversation by a session header, below auth and caller headers.
+                if let sessionHeaders = ClientIdentity.openCodeSessionHeaders(for: model, sessionId: options.sessionId),
                     !options.headers.keys.contains(where: { $0.lowercased() == "x-opencode-session" })
                 {
-                    options.headers["x-opencode-session"] = sessionId
+                    options.headers.merge(sessionHeaders.mapValues(Optional.some)) { $1 }
                 }
                 let resolved = ResolvedOptions(model: model, transcript: transcript, options: options, useEnvironment: useEnvironment)
                 switch model.api {

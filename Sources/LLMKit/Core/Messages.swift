@@ -93,6 +93,8 @@ public struct Cost: Codable, Sendable, Hashable {
     public var cacheRead: Double = 0
     public var cacheWrite: Double = 0
     public var total: Double = 0
+    /// True when `total` is the billed cost reported by the provider. False when it is a catalog estimate; absent also means false.
+    public var totalFromProvider: Bool?
 
     public init() {}
 }
@@ -128,6 +130,7 @@ public struct Usage: Codable, Sendable, Hashable {
         cost.cacheRead = rates.cacheRead / 1_000_000 * Double(cacheRead)
         cost.cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000
         cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite
+        cost.totalFromProvider = false
     }
 }
 
