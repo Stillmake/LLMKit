@@ -220,3 +220,135 @@ import Testing
         #expect(wire[1] == ["role": "assistant", "content": "answer", "reasoning_content": "think"])
     }
 }
+
+/// Ports pi-ai's `test/identity.test.ts` (pi-mono 7c22a93), minus the `Models`/wrapper identity merging
+/// the port has no equivalent for.
+@Suite struct ClientIdentityTests {
+    let acme = ClientAttribution(name: "acme", url: "https://acme.example")
+
+    func model(_ provider: String, _ baseURL: String) -> Model {
+        Model(id: "test-model", api: .openAICompletions, provider: provider, baseURL: baseURL)
+    }
+
+    @Test func keepsTheVersionInSyncWithTheCatalog() throws {
+        let version = try #require(ModelCatalog.builtin.version)
+        #expect(ClientIdentity().formattedUserAgent.hasPrefix("pi/\(version) ("))
+    }
+
+    @Test func formatsUserAgents() {
+        #expect(ClientIdentity(version: "9.9.9").formattedUserAgent.wholeMatch(of: /pi\/9\.9\.9 \([a-z]+; [a-z0-9]+\)/) != nil)
+        #expect(ClientIdentity(userAgent: .short, version: "9.9.9").formattedUserAgent == "pi")
+        #expect(ClientIdentity(userAgent: .custom("acme/1.0")).formattedUserAgent == "acme/1.0")
+    }
+
+    @Test func encodesUserAgentModesAsPiAIJSON() throws {
+        let json = String(decoding: try JSONEncoder().encode([UserAgentMode.short, .detailed, .custom("acme")]), as: UTF8.self)
+        #expect(json == #"["short","detailed",{"custom":"acme"}]"#)
+        #expect(try JSONDecoder().decode([UserAgentMode].self, from: Data(json.utf8)) == [.short, .detailed, .custom("acme")])
+    }
+
+    @Test func sendsNoAttributionUnlessEnabled() {
+        let openRouter = model("openrouter", "https://openrouter.ai/api/v1")
+        #expect(ClientIdentity().attributionHeaders(for: openRouter).isEmpty)
+        #expect(ClientIdentity().headers(for: openRouter) == ["User-Agent": ClientIdentity().formattedUserAgent])
+    }
+
+    @Test func attributesOpenRouterRequests() {
+        let openRouter = model("openrouter", "https://openrouter.ai/api/v1")
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: openRouter) == [
+            "HTTP-Referer": "https://pi.dev", "X-OpenRouter-Title": "pi", "X-OpenRouter-Categories": "cli-agent",
+        ])
+        var categorized = acme
+        categorized.categories = ["cli-agent", "cloud-agent"]
+        #expect(ClientIdentity(attribution: categorized).attributionHeaders(for: openRouter) == [
+            "HTTP-Referer": "https://acme.example", "X-OpenRouter-Title": "acme", "X-OpenRouter-Categories": "cli-agent,cloud-agent",
+        ])
+        var uncategorized = acme
+        uncategorized.categories = []
+        #expect(ClientIdentity(attribution: uncategorized).attributionHeaders(for: openRouter) == [
+            "HTTP-Referer": "https://acme.example", "X-OpenRouter-Title": "acme",
+        ])
+        // Custom providers routed through OpenRouter, including legacy base URLs that are not valid URLs.
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: model("custom", "not-a-url-openrouter.ai"))["X-OpenRouter-Title"] == "pi")
+    }
+
+    @Test func attributesNvidiaWithACapitalizedNameAndOpenCodeWithTheName() {
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: model("nvidia", "https://example.test/v1")) == ["X-BILLING-INVOKE-ORIGIN": "Pi"])
+        #expect(ClientIdentity(attribution: acme).attributionHeaders(for: model("custom-nim", "https://integrate.api.nvidia.com/v1")) == ["X-BILLING-INVOKE-ORIGIN": "Acme"])
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: model("opencode", "https://opencode.ai/zen/v1")) == ["x-opencode-client": "pi"])
+        #expect(ClientIdentity(attribution: acme).attributionHeaders(for: model("custom", "https://opencode.ai/zen/v1")) == ["x-opencode-client": "acme"])
+    }
+
+    @Test func doesNotAttributeNvidiaModelsRoutedThroughGateways() {
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: model("openrouter", "https://openrouter.ai/api/v1"))["X-BILLING-INVOKE-ORIGIN"] == nil)
+        #expect(ClientIdentity(attribution: .pi).attributionHeaders(for: model("vercel-ai-gateway", "https://ai-gateway.vercel.sh/v1")).isEmpty)
+    }
+}
+
+/// Answers every request with a minimal Chat Completions stream and records the request, like pi-ai's `capturingFetch`.
+final class CapturingURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var captured: URLRequest?
+
+    static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CapturingURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.captured = request
+        let body = """
+            data: {"id":"chatcmpl-identity","choices":[{"delta":{"content":"ok"},"finish_reason":null,"index":0}]}
+
+            data: {"id":"chatcmpl-identity","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":1,"completion_tokens":1}}
+
+            data: [DONE]
+
+
+            """
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["content-type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+@Suite(.serialized) struct ClientIdentityRequestTests {
+    let context = Context(messages: [.user(UserMessage("hello"))])
+
+    func send(_ model: Model, _ options: StreamOptions) async throws -> URLRequest {
+        var options = options
+        options.apiKey = "key"
+        options.session = CapturingURLProtocol.session()
+        _ = try await LLM.complete(model: model, context: context, options: options)
+        return try #require(CapturingURLProtocol.captured)
+    }
+
+    @Test func appliesTheIdentityBelowModelAndRequestHeaders() async throws {
+        let model = Model(id: "test-model", api: .openAICompletions, provider: "openrouter", baseURL: "https://openrouter.ai/api/v1",
+                          headers: ["X-OpenRouter-Title": "model-title"])
+        let request = try await send(model, StreamOptions(headers: ["HTTP-Referer": nil], identity: ClientIdentity(userAgent: .short, attribution: .pi)))
+        #expect(request.value(forHTTPHeaderField: "user-agent") == "pi")
+        #expect(request.value(forHTTPHeaderField: "x-openrouter-title") == "model-title")
+        #expect(request.value(forHTTPHeaderField: "http-referer") == nil)
+    }
+
+    @Test func keepsImpersonatingModelHeadersOverTheIdentityUserAgent() async throws {
+        let model = Model(id: "test-model", api: .openAICompletions, provider: "github-copilot", baseURL: "https://api.githubcopilot.com",
+                          headers: ["User-Agent": "GitHubCopilotChat/0.35.0"])
+        let request = try await send(model, StreamOptions(identity: ClientIdentity(userAgent: .custom("acme"))))
+        #expect(request.value(forHTTPHeaderField: "user-agent") == "GitHubCopilotChat/0.35.0")
+    }
+
+    @Test func sendsTheOpenCodeSessionHeaderToCustomProvidersPointingAtOpenCode() async throws {
+        let model = Model(id: "test-model", api: .openAICompletions, provider: "custom-opencode", baseURL: "https://opencode.ai/zen/v1")
+        #expect(try await send(model, StreamOptions(sessionId: "session-1")).value(forHTTPHeaderField: "x-opencode-session") == "session-1")
+        let configured = try await send(model, StreamOptions(headers: ["X-OpenCode-Session": "configured"], sessionId: "session-1"))
+        #expect(configured.value(forHTTPHeaderField: "x-opencode-session") == "configured")
+    }
+}
