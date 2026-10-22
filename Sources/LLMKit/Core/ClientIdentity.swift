@@ -8,6 +8,35 @@ public enum UserAgentMode: Codable, Sendable, Hashable {
     case short
     case detailed
     case custom(String)
+
+    // pi-ai's JSON shape: `"short"`, `"detailed"`, or `{ "custom": "<value>" }`.
+    private enum CodingKeys: String, CodingKey { case custom }
+
+    public init(from decoder: any Decoder) throws {
+        if let mode = try? decoder.singleValueContainer().decode(String.self) {
+            switch mode {
+            case "short": self = .short
+            case "detailed": self = .detailed
+            default: throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown user agent mode: \(mode)"))
+            }
+        } else {
+            self = .custom(try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .custom))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .short:
+            var container = encoder.singleValueContainer()
+            try container.encode("short")
+        case .detailed:
+            var container = encoder.singleValueContainer()
+            try container.encode("detailed")
+        case .custom(let value):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(value, forKey: .custom)
+        }
+    }
 }
 
 /// Who requests are attributed to. `ClientIdentity.attributionHeaders(for:)` maps the fields to each provider's headers.
