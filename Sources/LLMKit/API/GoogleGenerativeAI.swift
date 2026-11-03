@@ -168,7 +168,7 @@ enum GoogleGenerativeAI {
                 return [
                     "name": .string(tool.name),
                     "description": .string(tool.description),
-                    "parametersJsonSchema": StrictSchema.parameters(of: tool, strict: strict),
+                    "parametersJsonSchema": rewriteConstAsEnum(StrictSchema.parameters(of: tool, strict: strict)),
                 ]
             }
             body["tools"] = [["functionDeclarations": .array(declarations)]]
@@ -245,6 +245,31 @@ enum GoogleGenerativeAI {
                 usage.applyCost(of: model)
                 builder.message.usage = usage
             }
+        }
+    }
+
+    /// Gemini honors enum but ignores string and number const values in JSON schemas.
+    static func rewriteConstAsEnum(_ schema: JSONValue, nameMap: Bool = false) -> JSONValue {
+        let nameMaps: Set<String> = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]
+        let subschemas: Set<String> = ["additionalProperties", "unevaluatedProperties", "propertyNames", "items", "prefixItems", "additionalItems", "unevaluatedItems", "contains", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "contentSchema"]
+        switch schema {
+        case .array(let values): return .array(values.map { rewriteConstAsEnum($0) })
+        case .object(let object):
+            var result = object.mapValues { $0 }
+            for (key, value) in object {
+                if nameMap || subschemas.contains(key) { result[key] = rewriteConstAsEnum(value) }
+                else if nameMaps.contains(key) { result[key] = rewriteConstAsEnum(value, nameMap: true) }
+            }
+            if !nameMap, result["enum"] == nil, let value = result["const"] {
+                switch value {
+                case .string, .number:
+                    result["const"] = nil
+                    result["enum"] = .array([value])
+                default: break
+                }
+            }
+            return .object(result)
+        default: return schema
         }
     }
 }

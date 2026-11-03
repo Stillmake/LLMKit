@@ -99,7 +99,7 @@ public struct ClientIdentity: Codable, Sendable, Hashable {
             let arch = "x64"
             #endif
             // pi-ai's PI_AI_VERSION; bump with each catalog sync.
-            return "pi/\(version ?? "1.4.0") (\(platform); \(arch))"
+            return "pi/\(version ?? "1.5.0") (\(platform); \(arch))"
         }
     }
 

@@ -260,6 +260,9 @@ enum OpenAICompletions {
         usage.reasoning = raw["completion_tokens_details"]?["reasoning_tokens"]?.intValue ?? 0
         usage.totalTokens = usage.input + usage.output + cacheRead + cacheWrite
         usage.applyCost(of: model)
+        if model.provider == "openrouter" || model.baseURL.contains("openrouter.ai") {
+            OpenRouterCost.apply(raw, to: &usage)
+        }
         return usage
     }
 

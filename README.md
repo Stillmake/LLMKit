@@ -6,7 +6,7 @@
 
 One Swift API for streaming, tool calls, and reasoning across OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter and 30+ providers.
 
-LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,235 models).
+LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,276 models).
 
 ```swift
 import LLMKit
@@ -100,7 +100,7 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-Adapters ported from pi-mono commit `7c22a93d0ed02092142fa63823e63d76aa4e2406`; OAuth login flows (`Sources/LLMKit/Auth/`) unchanged through that commit. The catalog comes from `@earendil-works/pi-ai` 1.4.0.
+Adapters ported from pi-mono commit `f9a26365568127461c47a07a37dcb42c140a3ac5`; OAuth login flows (`Sources/LLMKit/Auth/`) reviewed through that commit. The catalog comes from `@earendil-works/pi-ai` 1.5.0.
 
 Keep the upstream sources in the git-ignored `upstream/` folder so they are fetched once and updated in place:
 

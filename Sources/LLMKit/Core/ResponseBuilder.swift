@@ -20,6 +20,7 @@ final class ResponseBuilder {
         var thoughtSignature: String?
         var namespace: String?
         var argumentsError: String?
+        var argumentsParser = StreamingJSON()
         var isClosed = false
 
         init(kind: Kind, index: Int, text: String) {
@@ -120,17 +121,23 @@ final class ResponseBuilder {
         assert(block.kind == .toolCall && !block.isClosed)
         guard !delta.isEmpty else { return }
         block.text += delta
-        block.arguments = PartialJSON.parseObject(block.text)
+        block.argumentsParser.append(delta)
+        block.arguments = block.argumentsParser.snapshot()
         continuation.yield(.toolCallDelta(index: block.index, delta: delta, arguments: block.arguments))
     }
 
     /// Replaces the streamed arguments with the authoritative final JSON, emitting any unseen suffix.
     func setToolArguments(_ json: String, on block: Block) {
-        if json.hasPrefix(block.text), json.count > block.text.count {
-            appendToolArguments(String(json.dropFirst(block.text.count)), to: block)
+        if json.hasPrefix(block.text) {
+            if json.count > block.text.count {
+                appendToolArguments(String(json.dropFirst(block.text.count)), to: block)
+            }
+        } else {
+            block.argumentsParser = StreamingJSON()
+            block.argumentsParser.append(json)
         }
         block.text = json
-        block.arguments = PartialJSON.parseObject(json)
+        block.arguments = block.argumentsParser.snapshot()
     }
 
     // MARK: Closing

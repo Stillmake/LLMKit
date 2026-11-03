@@ -114,8 +114,6 @@ enum AnthropicMessages {
                 if !blocks.isEmpty { wire.append(["role": "user", "content": .array(blocks)]) }
 
             case .assistant(let assistant):
-                wire += pendingSystem
-                pendingSystem = []
                 let blocks: [JSONValue] = assistant.content.compactMap { block -> JSONValue? in
                     switch block {
                     case .text(let text):
@@ -136,7 +134,11 @@ enum AnthropicMessages {
                         return ["type": "tool_use", "id": .string(call.id), "name": .string(wireToolName(call.name)), "input": .object(call.arguments)]
                     }
                 }
-                if !blocks.isEmpty { wire.append(["role": "assistant", "content": .array(blocks)]) }
+                if !blocks.isEmpty {
+                    wire += pendingSystem
+                    pendingSystem = []
+                    wire.append(["role": "assistant", "content": .array(blocks)])
+                }
 
             case .toolResult:
                 func imageBlock(_ image: ImageContent) -> JSONValue {
@@ -343,6 +345,9 @@ enum AnthropicMessages {
                     if let value = usage["output_tokens_details"]?["thinking_tokens"]?.intValue { builder.message.usage.reasoning = value }
                 }
                 updateTotals(&builder.message.usage, model: model)
+                if isOpenRouter, let usage = data["usage"] {
+                    OpenRouterCost.apply(usage, to: &builder.message.usage)
+                }
 
             default:
                 sawStop = true

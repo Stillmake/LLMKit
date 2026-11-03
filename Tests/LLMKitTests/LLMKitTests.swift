@@ -3,6 +3,67 @@ import Testing
 
 @testable import LLMKit
 
+@Suite struct Upstream150Tests {
+    @Test func incrementalArgumentsHandleChunksAndKeepSnapshots() {
+        let parser = StreamingJSON()
+        parser.append(#"{"items":[{"text":"hello"#)
+        let first = parser.snapshot()
+        #expect(first == ["items": [["text": "hello"]]])
+        parser.append(#"\nworld","n":1e"#)
+        #expect(parser.snapshot() == ["items": [["text": "hello\nworld", "n": 1]]])
+        #expect(first == ["items": [["text": "hello"]]])
+        parser.append(#"2},true,null],"emoji":"\uD83D\uDE00"}"#)
+        #expect(parser.snapshot() == ["items": [["text": "hello\nworld", "n": 100], true, .null], "emoji": "😀"])
+    }
+
+    @Test func incrementalArgumentsHandleSplitEscapesAndInvalidInput() {
+        let parser = StreamingJSON()
+        parser.append(#"{"a":"x\u00"#)
+        #expect(parser.snapshot() == ["a": "x"])
+        parser.append(#"e9\q","b":fal"#)
+        #expect(parser.snapshot() == ["a": "xé\\q", "b": false])
+        parser.append(#"se}"#)
+        #expect(parser.snapshot() == ["a": "xé\\q", "b": false])
+    }
+
+    @Test func incrementalArgumentsParseOneCharacterAtATime() throws {
+        let text = #"{"nested":[1,2,{"unicode":"😀","escaped":"a\\\"b","value":-1.25e+3}],"empty":{},"bool":true}"#
+        let expected = try #require(try JSONValue(parsing: text).objectValue)
+        let parser = StreamingJSON()
+        for char in text {
+            parser.append(String(char))
+            _ = parser.snapshot()
+        }
+        #expect(parser.snapshot() == expected)
+    }
+
+    @Test func geminiConstRewritePreservesLiteralData() {
+        let input: JSONValue = ["properties": ["kind": ["const": "x"], "const": ["const": 3]],
+                                "default": ["const": "literal"], "examples": [["const": "example"]]]
+        let output = GoogleGenerativeAI.rewriteConstAsEnum(input)
+        #expect(output["properties"]?["kind"]?["enum"] == ["x"])
+        #expect(output["properties"]?["const"]?["enum"] == [3])
+        #expect(output["default"] == ["const": "literal"])
+        #expect(output["examples"] == [["const": "example"]])
+    }
+
+    @Test func openRouterCostRequiresCompleteAccounting() {
+        var usage = Usage()
+        usage.cost.total = 42
+        OpenRouterCost.apply(["cost": 0.5, "is_byok": true, "cost_details": ["upstream_inference_cost": .null, "upstream_inference_prompt_cost": 1, "upstream_inference_completions_cost": 2]], to: &usage)
+        #expect(usage.cost.total == 3.5)
+        #expect(usage.cost.totalFromProvider == true)
+        usage.cost.total = 42
+        usage.cost.totalFromProvider = false
+        OpenRouterCost.apply(["cost": 0.5, "is_byok": true, "cost_details": [:]], to: &usage)
+        #expect(usage.cost.total == 42)
+        #expect(usage.cost.totalFromProvider == false)
+        OpenRouterCost.apply(["cost": 0, "is_byok": false], to: &usage)
+        #expect(usage.cost.total == 0)
+        #expect(usage.cost.totalFromProvider == true)
+    }
+}
+
 @Suite struct PartialJSONTests {
     @Test func parsesCompleteJSON() {
         #expect(PartialJSON.parseObject(#"{"path": "a.txt", "line": 3}"#) == ["path": "a.txt", "line": 3])
