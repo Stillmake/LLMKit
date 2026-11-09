@@ -41,23 +41,13 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 ## Design
 
 - **One conversation format.** `Message` (`.system`, `.user`, `.assistant`, `.toolResult`) is `Codable` and is what you store.
-- **Switch models mid-conversation.** History is converted for the target model; see below.
+- **Switch models mid-conversation.** Provider-opaque data (signatures, encrypted reasoning) and thinking are replayed only to their source model; other models get text and tool calls, with tool-call ids and pairing repaired.
 - **One event stream.** `start`, then text/thinking/tool-call start-delta-end triples, then `done` or `error`.
 - **Typed parameters.** `temperature`, `maxTokens`, `reasoning` (clamped to the model), `toolChoice`, `cacheRetention`; `extraBody` and `onPayload` reach the raw request.
 - **Compatibility as data.** `ModelCompat` captures per-provider quirks, detected from provider and URL and overridden by the catalog.
 - **`stream` never throws.** Failures end it with `.error`; cancelling the task cancels the request; pre-stream failures are retried, honoring `retry-after`.
 
 Auth comes from, in order: an explicit `StreamOptions.apiKey`, the provider's stored credential (an API key or a sign-in, never both), or its environment variable. A stored sign-in owns its provider; an empty key, passed or stored, reads the environment, as in pi-ai. `ModelCatalog.builtin.providerInfo` gives display names and models.dev logo ids.
-
-### Switching models mid-conversation
-
-Conversion keeps messages and tool results, repairs tool call pairing, replaces unsupported images,
-and drops failed assistant turns. Signatures and redacted thinking stay with their source model.
-Foreign thinking is dropped by default; set `StreamOptions(foreignReasoning: .text)` to retain
-readable thinking as tagged assistant text. `LLM.estimateTokens(model:context:options:)` estimates
-the converted request and its remaining output capacity. If the known context window cannot fit
-the request and an answer, the stream ends with `LLMError.contextOverflow`. Provider prompt caches
-never cross models: switching costs one full uncached prefill.
 
 ## Subscription sign-in
 
@@ -91,9 +81,7 @@ for await event in credentials.stream(model: model, context: context) { … }
 
 ## Scope relative to pi-ai
 
-Ported: the five adapters above, `transform-messages`, transcript system-message replay, the compat schema and detection, thinking-level mapping and budgets, prompt caching, strict JSON-schema tools, usage and cost (including tiers and service tiers), retries, and the model catalog.
-
-LLMKit extensions: model-aware converted transcript estimates and overflow errors, collision-resistant identifiers, and opt-in foreign reasoning as text.
+Ported: the five adapters above, `transform-messages`, transcript system-message replay, context token estimation and overflow utilities, the compat schema and detection, thinking-level mapping and budgets, prompt caching, strict JSON-schema tools, usage and cost (including tiers and service tiers), retries, and the model catalog.
 
 Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket transport, OpenAI grammar (custom) tools, mid-conversation tool additions and effort messages, Anthropic server-side fallbacks, the Radius gateway login, and image generation and classifiers.
 

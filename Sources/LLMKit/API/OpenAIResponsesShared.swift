@@ -16,8 +16,7 @@ enum OpenAIResponsesShared {
         messages: [Message],
         toolCallProviders: Set<String>,
         includeSystemPrompt: Bool,
-        supportsMidConvoSystemMessages: Bool,
-        foreignReasoning: ForeignReasoning = .drop
+        supportsMidConvoSystemMessages: Bool
     ) -> [JSONValue] {
         func normalizePart(_ part: String) -> String {
             var normalized = Transcript.sanitizeIdentifier(part)
@@ -26,7 +25,7 @@ enum OpenAIResponsesShared {
         }
         let transformed = Transcript.transform(
             Transcript.resolve(messages, supportsMidConvoSystemMessages: supportsMidConvoSystemMessages),
-            for: model, foreignReasoning: foreignReasoning
+            for: model
         ) { id, source in
             guard toolCallProviders.contains(model.provider), let separator = id.firstIndex(of: "|") else {
                 return normalizePart(id)

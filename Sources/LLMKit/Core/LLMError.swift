@@ -9,8 +9,6 @@ public enum LLMError: Error, LocalizedError, Sendable {
     case protocolViolation(String)
     /// The provider reported a failure inside an otherwise successful stream.
     case provider(String)
-    /// The converted request does not fit the context window with room for an answer.
-    case contextOverflow(estimatedInputTokens: Int, contextWindow: Int)
     case invalidRequest(String)
     /// Login, credential storage or token refresh failed.
     case auth(String)
@@ -19,7 +17,6 @@ public enum LLMError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .contextOverflow(let input, let window): "Estimated input tokens (\(input)) exceed the available context window (\(window)) with room for an answer."
         case .missingAPIKey(let provider): "No API key for provider: \(provider)"
         case .unsupportedAPI(let api): "No adapter for API: \(api)"
         case .http(let status, let message, _): "\(status) \(message)"

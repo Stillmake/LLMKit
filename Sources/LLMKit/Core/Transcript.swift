@@ -82,7 +82,6 @@ enum Transcript {
     static func transform(
         _ messages: [Message],
         for model: Model,
-        foreignReasoning: ForeignReasoning = .drop,
         normalizeToolCallId: ((String, AssistantMessage) -> String)? = nil
     ) -> [Message] {
         var idMap: [String: String] = [:]
@@ -106,10 +105,8 @@ enum Transcript {
                 assistant.content = assistant.content.compactMap { block in
                     switch block {
                     case .thinking(let thinking):
-                        if !isSameModel {
-                            guard foreignReasoning == .text, !thinking.redacted, !thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                            return .text(TextContent("<prior_reasoning model=\"\(source.provider)/\(source.model)\">\n\(thinking.thinking)\n</prior_reasoning>"))
-                        }
+                        // Readable thinking sent as text would read as part of the visible reply.
+                        guard isSameModel else { return nil }
                         if thinking.redacted || thinking.thinkingSignature != nil { return block }
                         return thinking.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : block
                     case .text(let text):
@@ -188,79 +185,9 @@ enum Transcript {
 
     // MARK: Estimation
 
-    /// Estimates the whole transcript and compares it with the latest valid usage anchor.
-    static func estimatedTokens(_ messages: [Message], for model: Model) -> (tokens: Int, isAnchored: Bool) {
-        func estimate(_ message: Message) -> Int {
-            var parts: [String] = []
-            var imageCharacters = 0
-            switch message {
-            case .system(let system):
-                parts.append(system.promptText)
-            case .user(let user):
-                for block in user.content {
-                    switch block {
-                    case .text(let text): parts.append(text.text)
-                    case .image: imageCharacters += 4800
-                    }
-                }
-            case .toolResult(let result):
-                for block in result.content {
-                    switch block {
-                    case .text(let text): parts.append(text.text)
-                    case .image: imageCharacters += 4800
-                    }
-                }
-            case .assistant(let assistant):
-                for block in assistant.content {
-                    switch block {
-                    case .text(let text): parts.append(text.text)
-                    case .thinking(let thinking): parts.append(thinking.thinking)
-                    case .toolCall(let call):
-                        parts.append(call.name)
-                        parts.append(JSONValue.object(call.arguments).jsonString())
-                    }
-                }
-            }
-            var cjk = 0
-            var other = imageCharacters
-            for part in parts {
-                var remaining = ""
-                for scalar in part.unicodeScalars {
-                    switch scalar.value {
-                    case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0x20000...0x2EBEF, 0x30000...0x323AF,
-                        0x3040...0x30FF, 0x31F0...0x31FF, 0x1B000...0x1B16F, 0xFF66...0xFF9F,
-                        0x1100...0x11FF, 0x3130...0x318F, 0xA960...0xA97F, 0xAC00...0xD7FF:
-                        cjk += 1
-                    default:
-                        remaining.unicodeScalars.append(scalar)
-                    }
-                }
-                other += remaining.count
-            }
-            return cjk + Int((Double(other) / 3.5).rounded(.up))
-        }
-
-        var latestTimestamp = Date.distantPast
-        var anchor: (index: Int, tokens: Int)?
-        for (index, message) in messages.enumerated() {
-            // A newer prefix message inserted after a response (a compaction summary) invalidates its usage.
-            if case .assistant(let assistant) = message, assistant.provider == model.provider, assistant.api == model.api, assistant.model == model.id, assistant.timestamp >= latestTimestamp,
-                assistant.stopReason != .error, assistant.stopReason != .aborted
-            {
-                let usage = assistant.usage
-                let tokens = usage.totalTokens > 0 ? usage.totalTokens : usage.input + usage.output + usage.cacheRead + usage.cacheWrite
-                if tokens > 0 { anchor = (index, tokens) }
-            }
-            latestTimestamp = max(latestTimestamp, message.timestamp)
-        }
-        let tools = currentTools(messages)
-        let toolTokens = tools.isEmpty ? 0 : estimate(.system(SystemMessage(JSONValue.array(tools.map { tool in
-            ["name": .string(tool.name), "description": .string(tool.description), "parameters": tool.parameters]
-        }).jsonString())))
-        let heuristic = messages.reduce(toolTokens) { $0 + estimate($1) }
-        guard let anchor else { return (heuristic, false) }
-        let anchored = anchor.tokens + messages[(anchor.index + 1)...].reduce(0) { $0 + estimate($1) }
-        return anchored >= heuristic ? (anchored, true) : (heuristic, false)
+    /// Context size estimate: the last valid assistant usage plus ~3.5 characters per token after it.
+    static func estimatedTokens(_ messages: [Message]) -> Int {
+        LLM.estimateContextTokens(messages).tokens
     }
 
     /// GitHub Copilot wants to know who initiated a request and whether it carries images.
@@ -290,13 +217,8 @@ enum Transcript {
 
     /// Replaces characters outside `[A-Za-z0-9_-]` with `_` and truncates.
     static func sanitizeIdentifier(_ id: String, maxLength: Int = 64) -> String {
-        let sanitized = String(id.unicodeScalars.map { scalar in
+        String(String(id.unicodeScalars.map { scalar in
             scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-") ? Character(scalar) : "_"
-        })
-        guard sanitized.count > maxLength else { return sanitized }
-        let hash = shortHash(id)
-        assert(maxLength > hash.count, "Identifier length must leave room for a hash")
-        guard maxLength > hash.count else { return String(hash.prefix(max(0, maxLength))) }
-        return String(sanitized.prefix(maxLength - hash.count - 1)) + "_" + hash
+        }).prefix(maxLength))
     }
 }

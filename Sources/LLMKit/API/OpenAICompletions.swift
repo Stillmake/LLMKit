@@ -269,7 +269,7 @@ enum OpenAICompletions {
     // MARK: Request
 
     static func requestBody(model: Model, messages: [Message], options: ResolvedOptions, compat: Compat) throws -> JSONObject {
-        var wireMessages = convertMessages(model: model, messages: messages, compat: compat, foreignReasoning: options.raw.foreignReasoning)
+        var wireMessages = convertMessages(model: model, messages: messages, compat: compat)
         let retention = options.raw.cacheRetention
         let effort = options.reasoning
         var body: JSONObject = ["model": .string(model.id), "stream": true]
@@ -451,8 +451,8 @@ enum OpenAICompletions {
         return true
     }
 
-    static func convertMessages(model: Model, messages: [Message], compat: Compat, foreignReasoning: ForeignReasoning = .drop) -> [JSONValue] {
-        let transformed = Transcript.transform(messages, for: model, foreignReasoning: foreignReasoning) { id, _ in
+    static func convertMessages(model: Model, messages: [Message], compat: Compat) -> [JSONValue] {
+        let transformed = Transcript.transform(messages, for: model) { id, _ in
             // Responses-style ids are `{call_id}|{item_id}` with 400+ characters; Chat Completions
             // needs distinct ids of at most 40 characters.
             guard let separator = id.firstIndex(of: "|") else {

@@ -25,14 +25,6 @@ public struct ThinkingBudgets: Sendable, Hashable {
     }
 }
 
-/// How readable reasoning from another model is included in a request.
-public enum ForeignReasoning: String, Codable, Sendable, Hashable {
-    /// Drop thinking produced by another provider, API, or model.
-    case drop
-    /// Keep readable thinking as tagged assistant text; redacted or empty thinking is dropped.
-    case text
-}
-
 /// Provider-neutral request options. Adapters translate each field into their wire format and
 /// ignore fields their API has no equivalent for.
 public struct StreamOptions: Sendable {
@@ -48,8 +40,6 @@ public struct StreamOptions: Sendable {
     public var maxTokens: Int?
     /// Thinking level, clamped to the model's supported levels. `nil` or `.off` disables thinking.
     public var reasoning: ThinkingLevel?
-    /// How to handle reasoning from another model. Defaults to `.drop`.
-    public var foreignReasoning: ForeignReasoning
     /// Custom thinking budgets. `nil` uses `ThinkingBudgets()`, or Gemini 2.5's model-specific defaults.
     public var thinkingBudgets: ThinkingBudgets?
     public var toolChoice: ToolChoice?
@@ -97,7 +87,6 @@ public struct StreamOptions: Sendable {
         maxTokens: Int? = nil,
         reasoning: ThinkingLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
-        foreignReasoning: ForeignReasoning = .drop,
         toolChoice: ToolChoice? = nil,
         cacheRetention: CacheRetention = .short,
         sessionId: String? = nil,
@@ -122,7 +111,6 @@ public struct StreamOptions: Sendable {
         self.temperature = temperature
         self.maxTokens = maxTokens
         self.reasoning = reasoning
-        self.foreignReasoning = foreignReasoning
         self.thinkingBudgets = thinkingBudgets
         self.toolChoice = toolChoice
         self.cacheRetention = cacheRetention
@@ -154,19 +142,19 @@ struct ResolvedOptions {
     /// Thinking level clamped to the model; `nil` when thinking is off.
     var reasoning: ThinkingLevel?
     var maxTokens: Int
-    var availableOutputTokens: Int?
     /// Model defaults, then thinking-level overrides, then request values.
     var samplingParams: JSONObject?
 
-    init(model: Model, estimate: TokenEstimate, options: StreamOptions, useEnvironment: Bool) {
+    init(model: Model, transcript: [Message], options: StreamOptions, useEnvironment: Bool) {
         raw = options
         apiKey = options.apiKey.flatMap { $0.isEmpty ? nil : $0 } ?? (useEnvironment ? APIKeyEnvironment.apiKey(for: model.provider) : nil)
         let clamped = options.reasoning.map(model.clampThinkingLevel) ?? .off
         reasoning = clamped == .off ? nil : clamped
         // pi-ai's clampMaxTokensToContext: keep a safety margin under the context window.
         let requested = options.maxTokens ?? model.maxTokens
-        availableOutputTokens = estimate.availableOutputTokens
-        maxTokens = estimate.availableOutputTokens.map { min(requested, $0) } ?? max(1, requested)
+        maxTokens = model.contextWindow > 0
+            ? min(requested, max(1, model.contextWindow - Transcript.estimatedTokens(transcript) - 4096))
+            : max(1, requested)
         let levelParams = model.samplingParamsByThinkingLevel?[clamped]
         samplingParams = model.samplingParams == nil && levelParams == nil && options.samplingParams == nil
             ? nil

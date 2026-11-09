@@ -1,17 +1,5 @@
 import Foundation
 
-/// Estimated request size and remaining output capacity for a model.
-public struct TokenEstimate: Sendable, Hashable {
-    /// Estimated input tokens, including the system prompt, tools, and converted messages.
-    public var inputTokens: Int
-    /// Context window, or `nil` when unknown.
-    public var contextWindow: Int?
-    /// Output capacity after the safety margin, or `nil` when the window is unknown.
-    public var availableOutputTokens: Int?
-    /// Whether the estimate uses reported usage from this model.
-    public var isAnchored: Bool
-}
-
 /// One Swift API over every supported LLM wire format.
 ///
 /// ```swift
@@ -22,14 +10,6 @@ public struct TokenEstimate: Sendable, Hashable {
 /// }
 /// ```
 public enum LLM {
-    /// Estimates the converted request for the target model.
-    public static func estimateTokens(model: Model, context: Context, options: StreamOptions = StreamOptions()) -> TokenEstimate {
-        let messages = Transcript.transform(Transcript.normalize(context), for: model, foreignReasoning: options.foreignReasoning)
-        let estimate = Transcript.estimatedTokens(messages, for: model)
-        let window = model.contextWindow > 0 ? model.contextWindow : nil
-        return TokenEstimate(inputTokens: estimate.tokens, contextWindow: window, availableOutputTokens: window.map { $0 - estimate.tokens - min(4096, $0 / 8) }, isAnchored: estimate.isAnchored)
-    }
-
     /// Streams one assistant response. Failures never throw: they end the stream with `.error`.
     public static func stream(model: Model, context: Context, options: StreamOptions = StreamOptions()) -> AssistantMessageStream {
         let (events, continuation) = AsyncStream.makeStream(of: AssistantMessageEvent.self)
@@ -37,10 +17,6 @@ public enum LLM {
             let builder = ResponseBuilder(model: model, continuation: continuation)
             do {
                 let transcript = Transcript.normalize(context)
-                let estimate = estimateTokens(model: model, context: context, options: options)
-                if let available = estimate.availableOutputTokens, available < min(minimumAnswerTokens, options.maxTokens ?? model.maxTokens) {
-                    throw LLMError.contextOverflow(estimatedInputTokens: estimate.inputTokens, contextWindow: model.contextWindow)
-                }
                 var model = model
                 var options = options
                 // The environment is ambient auth, as in pi-ai's resolveProviderAuth and envApiKeyAuth: an
@@ -59,7 +35,7 @@ public enum LLM {
                 {
                     options.headers.merge(sessionHeaders.mapValues(Optional.some)) { $1 }
                 }
-                let resolved = ResolvedOptions(model: model, estimate: estimate, options: options, useEnvironment: useEnvironment)
+                let resolved = ResolvedOptions(model: model, transcript: transcript, options: options, useEnvironment: useEnvironment)
                 switch model.api {
                 case .openAICompletions:
                     try await OpenAICompletions.run(model: model, transcript: transcript, options: resolved, builder: builder)
