@@ -45,7 +45,8 @@ enum OpenAIResponses {
                 messages: messages,
                 toolCallProviders: ["openai", "openai-codex", "opencode"],
                 includeSystemPrompt: true,
-                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages
+                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages,
+                foreignReasoning: options.raw.foreignReasoning
             )),
             "stream": true,
             "store": false,
@@ -164,7 +165,8 @@ enum OpenAICodexResponses {
                 messages: messages,
                 toolCallProviders: ["openai", "openai-codex", "opencode"],
                 includeSystemPrompt: false,
-                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages
+                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages,
+                foreignReasoning: options.raw.foreignReasoning
             )),
             "text": ["verbosity": .string(options.raw.textVerbosity ?? "low")],
             "include": ["reasoning.encrypted_content"],

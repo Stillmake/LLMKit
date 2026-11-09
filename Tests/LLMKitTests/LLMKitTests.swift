@@ -162,6 +162,123 @@ import Testing
         #expect(Transcript.transform(history, for: gpt).count == 1)
     }
 
+    @Test func modelAwareAnchorsAndForeignReasoning() {
+        var response = AssistantMessage(model: gpt)
+        response.content = [.thinking(ThinkingContent(String(repeating: "r", count: 70))), .text(TextContent("hello"))]
+        response.usage.totalTokens = 400
+        let context = Context(messages: [.user(UserMessage("hello", timestamp: .distantPast)), .assistant(response)])
+        let foreign = LLM.estimateTokens(model: claude, context: context)
+        #expect(!foreign.isAnchored)
+        #expect(foreign.inputTokens == 4)
+        let same = LLM.estimateTokens(model: gpt, context: context)
+        #expect(same.isAnchored && same.inputTokens == 400)
+        let retained = LLM.estimateTokens(model: claude, context: context, options: StreamOptions(foreignReasoning: .text))
+        #expect(retained.inputTokens > foreign.inputTokens)
+        guard case .assistant(let converted) = Transcript.transform(context.messages, for: claude, foreignReasoning: .text)[1] else {
+            Issue.record("assistant message missing")
+            return
+        }
+        #expect(converted.content == [.text(TextContent("<prior_reasoning model=\"openai/gpt-x\">\n" + String(repeating: "r", count: 70) + "\n</prior_reasoning>")), .text(TextContent("hello"))])
+    }
+
+    @Test func smallWindowAllowsRequestedAnswer() async {
+        let model = Model(id: "small", api: .openAIResponses, provider: "test", baseURL: "http://127.0.0.1:1", contextWindow: 4096, maxTokens: 256)
+        let options = StreamOptions(maxTokens: 256, resolveAuth: { _ in throw LLMError.invalidRequest("auth reached") })
+        var message: String?
+        for await event in LLM.stream(model: model, context: Context(), options: options) {
+            if case .error(let result) = event { message = result.errorMessage }
+        }
+        #expect(message == "auth reached")
+    }
+
+    @Test func expandedSystemPromptExceedsAnchor() {
+        var response = AssistantMessage(model: gpt)
+        response.content = [.text(TextContent("hello"))]
+        response.usage.totalTokens = 100
+        let context = Context(systemPrompt: String(repeating: "a", count: 40_000), messages: [.assistant(response)])
+        let estimate = LLM.estimateTokens(model: gpt, context: context)
+        #expect(estimate.inputTokens >= 11_429)
+        #expect(!estimate.isAnchored)
+    }
+
+    @Test func chineseTextEstimate() {
+        let context = Context(messages: [.user(UserMessage(String(repeating: "中", count: 10_000)))])
+        let estimate = LLM.estimateTokens(model: gpt, context: context)
+        #expect((9_000...11_000).contains(estimate.inputTokens))
+    }
+
+    @Test func estimatesOnlyCurrentTools() {
+        let large = Tool(name: "search", description: String(repeating: "a", count: 40_000), parameters: ["type": "object"])
+        let small = Tool(name: "search", description: "short", parameters: ["type": "object"])
+        let removed: [Message] = [.system(SystemMessage("base", toolsAdded: [large])), .system(SystemMessage("later", toolsRemoved: ["search"]))]
+        let noTools: [Message] = [.system(SystemMessage("base")), .system(SystemMessage("later"))]
+        let replaced: [Message] = [.system(SystemMessage("base", toolsAdded: [large])), .system(SystemMessage("later", toolsAdded: [small]))]
+        let currentOnly: [Message] = [.system(SystemMessage("base")), .system(SystemMessage("later", toolsAdded: [small]))]
+        let count = { (messages: [Message]) in LLM.estimateTokens(model: gpt, context: Context(messages: messages)).inputTokens }
+        #expect(abs(count(removed) - count(noTools)) <= 2)
+        #expect(abs(count(replaced) - count(currentOnly)) <= 2)
+
+        var response = AssistantMessage(model: gpt)
+        response.usage.totalTokens = 20_000
+        let anchored: [Message] = [.assistant(response), .system(SystemMessage("", toolsAdded: [large], timestamp: .distantPast))]
+        let estimate = LLM.estimateTokens(model: gpt, context: Context(messages: anchored))
+        #expect(estimate.isAnchored && estimate.inputTokens == 20_000)
+    }
+
+    @Test func identifierCollisionResistance() {
+        #expect(Transcript.sanitizeIdentifier("a|b") == "a_b")
+        let first = String(repeating: "a", count: 79) + "b"
+        let second = String(repeating: "a", count: 79) + "c"
+        let a = Transcript.sanitizeIdentifier(first)
+        let b = Transcript.sanitizeIdentifier(second)
+        #expect(a.count == 64 && b.count == 64 && a != b)
+        #expect(a == Transcript.sanitizeIdentifier(first))
+    }
+
+    @Test func dropMatchesPreviousMixedTranscript() {
+        let call = ToolCall(id: "call|1", name: "read", arguments: [:])
+        let history: [Message] = [assistant(from: gpt, [.thinking(ThinkingContent("plan")), .text(TextContent("hi", textSignature: "sig")), .toolCall(call)], stop: .toolUse), .toolResult(ToolResultMessage(toolCallId: "call|1", toolName: "read", content: [.text(TextContent("ok"))])), assistant(from: claude, [.thinking(ThinkingContent("local"))])]
+        var expected = history
+        if case .assistant(var message) = expected[0] {
+            message.content = [.text(TextContent("hi")), .toolCall(ToolCall(id: "call_1", name: "read", arguments: [:]))]
+            expected[0] = .assistant(message)
+        }
+        if case .toolResult(var result) = expected[1] { result.toolCallId = "call_1"; expected[1] = .toolResult(result) }
+        #expect(Transcript.transform(history, for: claude, foreignReasoning: .drop) { id, _ in Transcript.sanitizeIdentifier(id) } == expected)
+    }
+
+    @Test func overflowEndsStreamBeforeRequest() async throws {
+        let model = Model(id: "small", api: .openAIResponses, provider: "test", baseURL: "http://127.0.0.1:1", contextWindow: 5000, maxTokens: 2000)
+        let context = Context(messages: [.user(UserMessage(String(repeating: "x", count: 15000)))])
+        let estimate = LLM.estimateTokens(model: model, context: context)
+        let error = LLMError.contextOverflow(estimatedInputTokens: estimate.inputTokens, contextWindow: 5000)
+        var message: String?
+        for await event in LLM.stream(model: model, context: context, options: StreamOptions(apiKey: "key")) {
+            if case .error(let result) = event { message = result.errorMessage }
+        }
+        #expect(message == error.errorDescription)
+    }
+
+    @Test func estimateComparisonFixture() {
+        let third = Model(id: "gemini-x", api: .googleGenerativeAI, provider: "google", baseURL: "https://example.com")
+        var a = AssistantMessage(model: gpt, timestamp: Date(timeIntervalSince1970: 2)); a.content = [.thinking(ThinkingContent("private plan")), .text(TextContent("first"))]; a.usage.totalTokens = 100
+        var b = AssistantMessage(model: claude, timestamp: Date(timeIntervalSince1970: 4)); b.content = [.thinking(ThinkingContent("second plan")), .text(TextContent("second"))]; b.usage.totalTokens = 200
+        var c = AssistantMessage(model: third, timestamp: Date(timeIntervalSince1970: 6)); c.content = [.thinking(ThinkingContent("third plan")), .text(TextContent("third"))]; c.usage.totalTokens = 300
+        let messages: [Message] = [.user(UserMessage("hello", timestamp: Date(timeIntervalSince1970: 1))), .assistant(a), .user(UserMessage("next", timestamp: Date(timeIntervalSince1970: 3))), .assistant(b), .user(UserMessage("last", timestamp: Date(timeIntervalSince1970: 5))), .assistant(c)]
+        let noUsage = messages.map { message -> Message in
+            guard case .assistant(var assistant) = message else { return message }
+            assistant.usage = Usage()
+            return .assistant(assistant)
+        }
+        for model in [gpt, claude, third] {
+            let beforeNoUsage = Transcript.estimatedTokens(noUsage, for: third)
+            let afterNoUsage = LLM.estimateTokens(model: model, context: Context(messages: noUsage))
+            let before = Transcript.estimatedTokens(messages, for: third)
+            let after = LLM.estimateTokens(model: model, context: Context(messages: messages))
+            print("ESTIMATE \(model.id) before=\(before.tokens)/\(before.isAnchored) after=\(after.inputTokens)/\(after.isAnchored) noUsageBefore=\(beforeNoUsage.tokens) noUsageAfter=\(afterNoUsage.inputTokens)")
+        }
+    }
+
     @Test func collapsesSystemMessages() {
         let tool = Tool(name: "a", description: "", parameters: ["type": "object"])
         let messages: [Message] = [
@@ -258,7 +375,7 @@ import Testing
 
     @Test func deepSeekRequestUsesDetectedCompat() throws {
         let messages = Transcript.normalize(Context(systemPrompt: "Be brief.", messages: [.user(UserMessage("hi"))]))
-        let options = ResolvedOptions(model: deepseek, transcript: messages, options: StreamOptions(apiKey: "k", reasoning: .high), useEnvironment: false)
+        let options = ResolvedOptions(model: deepseek, estimate: LLM.estimateTokens(model: deepseek, context: Context(messages: messages)), options: StreamOptions(apiKey: "k", reasoning: .high), useEnvironment: false)
         let body = try OpenAICompletions.requestBody(model: deepseek, messages: messages, options: options, compat: .init(model: deepseek))
         #expect(body["max_tokens"] == 8192)
         #expect(body["max_completion_tokens"] == nil)

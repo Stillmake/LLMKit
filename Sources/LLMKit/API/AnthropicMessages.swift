@@ -53,8 +53,8 @@ enum AnthropicMessages {
                 var budget = (options.raw.thinkingBudgets ?? ThinkingBudgets())[level]
                 maxTokens = min(maxTokens + budget, model.maxTokens)
                 if maxTokens <= budget { budget = max(0, maxTokens - minimumAnswerTokens) }
-                if model.contextWindow > 0 {
-                    maxTokens = min(maxTokens, max(1, model.contextWindow - Transcript.estimatedTokens(transcript) - 4096))
+                if let available = options.availableOutputTokens {
+                    maxTokens = min(maxTokens, available)
                 }
                 budget = min(budget, max(0, maxTokens - minimumAnswerTokens))
                 thinking = ["type": "enabled", "budget_tokens": .number(Double(budget > 0 ? budget : 1024)), "display": display]
@@ -88,7 +88,7 @@ enum AnthropicMessages {
             headers[format == .openRouter ? "x-session-id" : "x-session-affinity"] = sessionId
         }
 
-        let transformed = Transcript.transform(messages, for: model) { id, _ in Transcript.sanitizeIdentifier(id) }
+        let transformed = Transcript.transform(messages, for: model, foreignReasoning: options.raw.foreignReasoning) { id, _ in Transcript.sanitizeIdentifier(id) }
         let allowEmptySignature = overrides.allowEmptySignature ?? false
         var wire: [JSONValue] = []
         // Later system messages wait until just before the next assistant message: tool results

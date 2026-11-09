@@ -65,7 +65,7 @@ enum GoogleGenerativeAI {
         let requiresToolCallId = model.id.hasPrefix("claude-") || model.id.hasPrefix("gpt-oss-") || (geminiMajorVersion ?? 0) >= 3
         let supportsMultimodalFunctionResponse = geminiMajorVersion.map { $0 >= 3 } ?? true
         let conversation = Transcript.initialSystemMessage(messages) == nil ? messages : Array(messages.dropFirst())
-        let transformed = Transcript.transform(conversation, for: model) { id, _ in
+        let transformed = Transcript.transform(conversation, for: model, foreignReasoning: options.raw.foreignReasoning) { id, _ in
             requiresToolCallId ? Transcript.sanitizeIdentifier(id) : id
         }
 
