@@ -46,6 +46,9 @@ public struct StreamOptions: Sendable {
     public var cacheRetention: CacheRetention
     /// Identifies a conversation for prompt caching and session-affinity routing. OpenCode requires it.
     public var sessionId: String?
+    /// Do not use or record server-side continuation state for this request, such as Anthropic
+    /// message threads. Set this for replays that must not replace the real conversation's state.
+    public var disableContinuation: Bool
     /// Arbitrary sampling parameters (`top_p`, `top_k`, `min_p`, ...), merged over the model's
     /// defaults per key. Applied by the OpenAI-compatible APIs.
     public var samplingParams: JSONObject?
@@ -90,6 +93,7 @@ public struct StreamOptions: Sendable {
         toolChoice: ToolChoice? = nil,
         cacheRetention: CacheRetention = .short,
         sessionId: String? = nil,
+        disableContinuation: Bool = false,
         samplingParams: JSONObject? = nil,
         extraBody: JSONObject? = nil,
         onPayload: (@Sendable (inout JSONValue, Model) -> Void)? = nil,
@@ -115,6 +119,7 @@ public struct StreamOptions: Sendable {
         self.toolChoice = toolChoice
         self.cacheRetention = cacheRetention
         self.sessionId = sessionId
+        self.disableContinuation = disableContinuation
         self.samplingParams = samplingParams
         self.extraBody = extraBody
         self.onPayload = onPayload
@@ -152,15 +157,29 @@ struct ResolvedOptions {
         reasoning = clamped == .off ? nil : clamped
         // pi-ai's clampMaxTokensToContext: keep a safety margin under the context window.
         let requested = options.maxTokens ?? model.maxTokens
-        maxTokens = model.contextWindow > 0
-            ? min(requested, max(1, model.contextWindow - Transcript.estimatedTokens(transcript) - 4096))
-            : max(1, requested)
+        maxTokens = Self.clampMaxTokensToContext(
+            contextWindow: model.contextWindow,
+            estimatedInput: Transcript.estimatedTokens(transcript),
+            maxTokens: requested
+        )
         let levelParams = model.samplingParamsByThinkingLevel?[clamped]
         samplingParams = model.samplingParams == nil && levelParams == nil && options.samplingParams == nil
             ? nil
             : (model.samplingParams ?? [:])
                 .merging(levelParams ?? [:]) { $1 }
                 .merging(options.samplingParams ?? [:]) { $1 }
+    }
+
+    /// Leaves room for the endpoint counting the input higher than estimated, such as OpenRouter's
+    /// tokenizer, while keeping a fixed margin for small inputs and small context windows.
+    static func clampMaxTokensToContext(contextWindow: Int, estimatedInput: Int, maxTokens: Int) -> Int {
+        guard contextWindow > 0 else { return max(1, maxTokens) }
+        let margin = max(4096, Int((Double(estimatedInput) * 0.15).rounded(.up)))
+        var room = contextWindow - estimatedInput - margin
+        if room < 32768 {
+            room = min(32768, contextWindow - estimatedInput - 4096)
+        }
+        return min(maxTokens, max(1, room))
     }
 
     func requireAPIKey(for model: Model) throws -> String {

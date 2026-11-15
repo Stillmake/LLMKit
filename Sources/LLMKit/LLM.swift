@@ -10,6 +10,13 @@ import Foundation
 /// }
 /// ```
 public enum LLM {
+    /// Frees provider state kept per session, such as Anthropic message-thread continuations and
+    /// remembered strict-tool limit rejections. Call this when a conversation ends.
+    public static func cleanupSessionResources(_ sessionId: String? = nil) {
+        AnthropicMessages.clearSessionResources(sessionId)
+        StrictToolLimits.clear(sessionId)
+    }
+
     /// Streams one assistant response. Failures never throw: they end the stream with `.error`.
     public static func stream(model: Model, context: Context, options: StreamOptions = StreamOptions()) -> AssistantMessageStream {
         let (events, continuation) = AsyncStream.makeStream(of: AssistantMessageEvent.self)

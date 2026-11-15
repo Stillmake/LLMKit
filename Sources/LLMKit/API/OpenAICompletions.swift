@@ -14,6 +14,8 @@ enum OpenAICompletions {
         var maxTokensField: ModelCompat.MaxTokensField
         var requiresToolResultName: Bool
         var requiresAssistantAfterToolResult: Bool
+        var requiresNonNullAssistantContent: Bool
+        var requiresToolsWithToolHistory: Bool
         var requiresThinkingAsText: Bool
         var requiresReasoningContentOnAssistantMessages: Bool
         var thinkingFormat: ThinkingFormat
@@ -28,6 +30,7 @@ enum OpenAICompletions {
         var usesAnthropicCacheControl: Bool
         var sendSessionAffinityHeaders: Bool
         var sessionAffinityFormat: ModelCompat.SessionAffinityFormat
+        var promptCacheKeyMode: ModelCompat.PromptCacheKeyMode
         var supportsLongCacheRetention: Bool
         var vllmPriority: Double?
 
@@ -65,6 +68,8 @@ enum OpenAICompletions {
             maxTokensField = overrides.maxTokensField ?? (usesMaxTokens ? .maxTokens : .maxCompletionTokens)
             requiresToolResultName = overrides.requiresToolResultName ?? false
             requiresAssistantAfterToolResult = overrides.requiresAssistantAfterToolResult ?? false
+            requiresNonNullAssistantContent = overrides.requiresNonNullAssistantContent ?? false
+            requiresToolsWithToolHistory = overrides.requiresToolsWithToolHistory ?? false
             requiresThinkingAsText = overrides.requiresThinkingAsText ?? false
             requiresReasoningContentOnAssistantMessages = overrides.requiresReasoningContentOnAssistantMessages ?? isDeepSeek
             thinkingFormat = overrides.thinkingFormat ?? detectedFormat
@@ -81,6 +86,7 @@ enum OpenAICompletions {
                 ?? (provider == "openrouter" && model.id.hasPrefix("anthropic/") ? "anthropic" : nil)) == "anthropic"
             sendSessionAffinityHeaders = overrides.sendSessionAffinityHeaders ?? isOpenRouter
             sessionAffinityFormat = overrides.sessionAffinityFormat ?? (isOpenRouter ? .openRouter : .openAI)
+            promptCacheKeyMode = overrides.promptCacheKeyMode ?? .auto
             supportsLongCacheRetention = overrides.supportsLongCacheRetention
                 ?? !(isTogether || isCloudflareWorkersAI || isCloudflareGateway || isNvidia || isAntLing)
             vllmPriority = overrides.vllmPriority
@@ -274,9 +280,10 @@ enum OpenAICompletions {
         let effort = options.reasoning
         var body: JSONObject = ["model": .string(model.id), "stream": true]
 
-        if let sessionId = options.raw.sessionId,
-            (model.baseURL.contains("api.openai.com") && retention != .none) || (retention == .long && compat.supportsLongCacheRetention)
-        {
+        let supportsPromptCacheKey = compat.promptCacheKeyMode == .enabled
+            || (compat.promptCacheKeyMode == .auto
+                && (model.baseURL.contains("api.openai.com") || (retention == .long && compat.supportsLongCacheRetention)))
+        if let sessionId = options.raw.sessionId, retention != .none, supportsPromptCacheKey {
             body["prompt_cache_key"] = .string(String(sessionId.prefix(64)))
         }
         if retention == .long, compat.supportsLongCacheRetention { body["prompt_cache_retention"] = "24h" }
@@ -300,14 +307,14 @@ enum OpenAICompletions {
                 return ["type": "function", "function": .object(function)]
             }
             if compat.zaiToolStream { body["tool_stream"] = true }
-        } else if messages.contains(where: { message in
+        } else if compat.requiresToolsWithToolHistory, messages.contains(where: { message in
             switch message {
             case .toolResult: true
             case .assistant(let assistant): !assistant.toolCalls.isEmpty
             default: false
             }
         }) {
-            // Anthropic behind LiteLLM-style proxies requires `tools` whenever the history has tool calls.
+            // Some proxies in front of Anthropic require `tools` once the history has tool calls.
             wireTools = []
         }
 
@@ -512,7 +519,10 @@ enum OpenAICompletions {
                     }
                 }
                 let text = textParts.joined()
-                var converted: JSONObject = ["role": "assistant", "content": compat.requiresAssistantAfterToolResult ? "" : .null]
+                var converted: JSONObject = [
+                    "role": "assistant",
+                    "content": compat.requiresAssistantAfterToolResult || compat.requiresNonNullAssistantContent ? "" : .null,
+                ]
 
                 // `reasoning_details` (OpenRouter) is the structured alternative to a raw reasoning field.
                 let reasoningDetails = thinkingBlocks.lazy.compactMap { block -> [JSONValue]? in

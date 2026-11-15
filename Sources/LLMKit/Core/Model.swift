@@ -171,6 +171,12 @@ public struct ModelCompat: Codable, Sendable, Hashable {
         case openRouter = "openrouter"
     }
 
+    public enum PromptCacheKeyMode: String, Codable, Sendable, Hashable {
+        case auto
+        case enabled
+        case disabled
+    }
+
     public enum ThinkingTokenBudgetField: String, Codable, Sendable, Hashable {
         /// vLLM.
         case thinkingTokenBudget = "thinking_token_budget"
@@ -187,6 +193,7 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var supportsLongCacheRetention: Bool?
     public var sendSessionAffinityHeaders: Bool?
     public var sessionAffinityFormat: SessionAffinityFormat?
+    public var promptCacheKeyMode: PromptCacheKeyMode?
 
     // OpenAI Chat Completions
     public var supportsStore: Bool?
@@ -196,6 +203,8 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var maxTokensField: MaxTokensField?
     public var requiresToolResultName: Bool?
     public var requiresAssistantAfterToolResult: Bool?
+    public var requiresNonNullAssistantContent: Bool?
+    public var requiresToolsWithToolHistory: Bool?
     public var requiresThinkingAsText: Bool?
     public var requiresReasoningContentOnAssistantMessages: Bool?
     public var thinkingFormat: ThinkingFormat?
@@ -226,6 +235,7 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var forceAdaptiveThinking: Bool?
     public var allowEmptySignature: Bool?
     public var supportsStrictTools: Bool?
+    public var supportsMessageThreads: Bool?
 
     public init() {}
 }

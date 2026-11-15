@@ -6,7 +6,7 @@
 
 One Swift API for streaming, tool calls, and reasoning across OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter and 30+ providers.
 
-LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,276 models).
+LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,315 models).
 
 ```swift
 import LLMKit
@@ -46,6 +46,7 @@ for await event in LLM.stream(model: model, context: context, options: StreamOpt
 - **Typed parameters.** `temperature`, `maxTokens`, `reasoning` (clamped to the model), `toolChoice`, `cacheRetention`; `extraBody` and `onPayload` reach the raw request.
 - **Compatibility as data.** `ModelCompat` captures per-provider quirks, detected from provider and URL and overridden by the catalog.
 - **`stream` never throws.** Failures end it with `.error`; cancelling the task cancels the request; pre-stream failures are retried, honoring `retry-after`.
+- **Session state is bounded.** Anthropic message threads reuse a reply when the preceding conversation is unchanged; call `LLM.cleanupSessionResources(sessionId)` when a conversation ends.
 
 Auth comes from, in order: an explicit `StreamOptions.apiKey`, the provider's stored credential (an API key or a sign-in, never both), or its environment variable. A stored sign-in owns its provider; an empty key, passed or stored, reads the environment, as in pi-ai. `ModelCatalog.builtin.providerInfo` gives display names and models.dev logo ids.
 
@@ -81,7 +82,7 @@ for await event in credentials.stream(model: model, context: context) { … }
 
 ## Scope relative to pi-ai
 
-Ported: the five adapters above, `transform-messages`, transcript system-message replay, context token estimation and overflow utilities, the compat schema and detection, thinking-level mapping and budgets, prompt caching, strict JSON-schema tools, usage and cost (including tiers and service tiers), retries, and the model catalog.
+Ported: the five adapters above, `transform-messages`, transcript system-message replay, context token estimation and overflow utilities, the compat schema and detection, thinking-level mapping and budgets, prompt caching, Anthropic message threads, strict JSON-schema tools, usage and cost (including tiers and service tiers), retries, and the model catalog.
 
 Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket transport, OpenAI grammar (custom) tools, mid-conversation tool additions and effort messages, Anthropic server-side fallbacks, the Radius gateway login, and image generation and classifiers.
 
@@ -100,13 +101,15 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-Adapters ported from pi-mono commit `f9a26365568127461c47a07a37dcb42c140a3ac5`; OAuth login flows (`Sources/LLMKit/Auth/`) reviewed through that commit. The catalog comes from `@earendil-works/pi-ai` 1.5.0.
+LLMKit syncs with pi-mono periodically, not for every upstream release, so intermediate versions can be skipped. This snapshot ports pi-mono tag `v1.5.2`; OAuth login flows (`Sources/LLMKit/Auth/`) were reviewed through that tag, and the catalog comes from `@earendil-works/pi-ai` 1.5.2. LLMKit is not fully compatible with every other pi-ai version: check this pin before assuming an upstream feature or fix is present.
+
+LLMKit release tags are independent of pi-ai versions. Starting with this release, tags use the release date as `YYYY.M.D` with no zero padding (`2026.11.15`); an LLMKit tag is not a claim of parity with a pi-ai release.
 
 Keep the upstream sources in the git-ignored `upstream/` folder so they are fetched once and updated in place:
 
 ```sh
-git clone https://github.com/badlogic/pi-mono upstream/pi-mono   # later: git -C upstream/pi-mono pull
-git -C upstream/pi-mono diff <ported commit> HEAD -- packages/ai/src
+git clone https://github.com/badlogic/pi-mono upstream/pi-mono   # later: git -C upstream/pi-mono pull --tags
+git -C upstream/pi-mono diff <ported tag> HEAD -- packages/ai/src
 
 mkdir -p upstream/pi-ai && (cd upstream/pi-ai && npm pack @earendil-works/pi-ai@<version> && tar xzf *.tgz)
 Scripts/sync-catalog.py upstream/pi-ai/package/dist/providers/data

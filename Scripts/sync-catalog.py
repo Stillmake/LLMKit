@@ -39,6 +39,7 @@ PROVIDER_OVERRIDES = {
     "qwen-token-plan": ("Qwen Token Plan", "alibaba-token-plan"),
     "qwen-token-plan-cn": ("Qwen Token Plan (China)", "alibaba-token-plan"),
     "qwen-token-plan-individual": ("Qwen Token Plan (Individual)", "alibaba-token-plan"),
+    "qwen-token-plan-individual-cn": ("Qwen Token Plan (Individual, China)", "alibaba-token-plan"),
     "together": ("Together AI", "togetherai"),
     "vercel-ai-gateway": ("Vercel AI Gateway", "vercel"),
     "zai-coding-cn": ("Z.AI Coding Plan (China)", "zhipuai-coding-plan"),

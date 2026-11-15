@@ -210,6 +210,26 @@ enum HTTP {
         return error?.stringValue ?? json["message"]?.stringValue ?? json["detail"]?.stringValue ?? body
     }
 
+    /// Appends the deepest underlying error, which URLSession and provider SDK-like errors often
+    /// hide behind a generic top-level description.
+    static func errorDescription(_ error: Error) -> String {
+        if let error = error as? LLMError { return error.localizedDescription }
+        let top = error as NSError
+        var deepest = top
+        for _ in 0..<5 {
+            guard let underlying = deepest.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+            deepest = underlying
+        }
+        var detail = deepest.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = deepest.code
+        if code != 0, !detail.contains("(\(code))") {
+            detail = detail.isEmpty ? String(code) : "\(detail) (\(code))"
+        }
+        let message = top.localizedDescription
+        guard !detail.isEmpty, detail != message, !message.contains(detail) else { return message }
+        return message.isEmpty ? detail : "\(message): \(detail)"
+    }
+
     /// Iterates SSE `data` payloads as JSON, skipping `[DONE]` and empty keep-alives.
     static func jsonEvents(_ bytes: URLSession.AsyncBytes) -> AsyncThrowingMapSequence<
         AsyncFilterSequence<ServerSentEvents<URLSession.AsyncBytes>>, (event: String?, json: JSONValue)

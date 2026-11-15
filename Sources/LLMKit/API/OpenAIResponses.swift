@@ -10,6 +10,7 @@ enum OpenAIResponses {
         let supportsLongCacheRetention = overrides.supportsLongCacheRetention ?? true
         let supportsStrictMode = overrides.supportsStrictMode ?? false
         let supportsExplicitPromptCacheMode = overrides.supportsExplicitPromptCacheMode ?? false
+        let promptCacheKeyMode = overrides.promptCacheKeyMode ?? .auto
         let isOpenRouter = model.provider == "openrouter" || model.baseURL.contains("openrouter.ai")
         let sessionAffinityFormat = overrides.sessionAffinityFormat ?? (isOpenRouter ? .openRouter : .openAI)
 
@@ -27,7 +28,7 @@ enum OpenAIResponses {
             case .openRouter:
                 headers["x-session-id"] = sessionId
             case .openAI:
-                headers["session_id"] = sessionId
+                headers["session-id"] = sessionId
                 headers["x-client-request-id"] = sessionId
             case .openAINoSession:
                 headers["x-client-request-id"] = sessionId
@@ -50,7 +51,9 @@ enum OpenAIResponses {
             "stream": true,
             "store": false,
         ]
-        if let sessionId { body["prompt_cache_key"] = .string(String(sessionId.prefix(64))) }
+        if let sessionId, retention != .none, promptCacheKeyMode != .disabled {
+            body["prompt_cache_key"] = .string(String(sessionId.prefix(64)))
+        }
         if !isChatGPTSignIn {
             if retention == .long, supportsLongCacheRetention, !supportsExplicitPromptCacheMode {
                 body["prompt_cache_retention"] = "24h"

@@ -111,6 +111,10 @@
   "name": "Qwen Token Plan (Individual)",
   "logo": "alibaba-token-plan"
  },
+ "qwen-token-plan-individual-cn": {
+  "name": "Qwen Token Plan (Individual, China)",
+  "logo": "alibaba-token-plan"
+ },
  "together": {
   "name": "Together AI",
   "logo": "togetherai"

@@ -187,7 +187,7 @@ final class ResponseBuilder {
         let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
         message.content = blocks.map(\.content)
         message.stopReason = cancelled ? .aborted : .error
-        message.errorMessage = cancelled ? "Request was aborted" : error.localizedDescription
+        message.errorMessage = cancelled ? "Request was aborted" : HTTP.errorDescription(error)
         message.duration = ContinuousClock.now - startedAt
         continuation.yield(.error(message))
     }

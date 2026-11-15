@@ -199,6 +199,119 @@ import Testing
     }
 }
 
+@Suite struct AnthropicMessageThreadTests {
+    let model = Model(
+        id: "claude-test",
+        api: .anthropicMessages,
+        provider: "anthropic",
+        baseURL: "https://api.anthropic.com"
+    )
+    let betas = [AnthropicMessages.messageThreadsBeta]
+
+    func body(messages: [JSONValue]) -> JSONObject {
+        [
+            "model": "claude-test",
+            "messages": .array(messages),
+            "system": [["type": "text", "text": "You are a test assistant."]],
+            "tools": [["name": "lookup", "input_schema": ["type": "object"]]],
+            "max_tokens": 100,
+            "stream": true,
+        ]
+    }
+
+    @Test func continuesWithOnlyNewMessagesAfterAnUnchangedPrefix() throws {
+        LLM.cleanupSessionResources()
+        let sessionId = "thread-\(UUID().uuidString)"
+        let first = body(messages: [[
+            "role": "user",
+            "content": [["type": "text", "text": "first", "cache_control": ["type": "ephemeral"]]],
+        ]])
+        let created = try #require(AnthropicMessages.prepareThreadRequest(
+            model: model,
+            sessionId: sessionId,
+            body: first,
+            betas: betas
+        ))
+        #expect(!created.isContinuation)
+        #expect(created.body["thread"] == ["type": "create"])
+
+        var output = AssistantMessage(model: model)
+        output.responseId = "msg_1"
+        output.content = [.text(TextContent("answer"))]
+        output.stopReason = .stop
+        AnthropicMessages.recordThreadReply(
+            model: model,
+            thread: created,
+            body: first,
+            output: output,
+            isOAuth: false,
+            allowEmptySignature: false,
+            betas: betas
+        )
+
+        // The cache marker moved from the first user message to the newest one; the server's
+        // thread prefix is unchanged, so only the new message is sent.
+        let next = body(messages: [
+            ["role": "user", "content": [["type": "text", "text": "first"]]],
+            ["role": "assistant", "content": [["type": "text", "text": "answer"]]],
+            ["role": "user", "content": [["type": "text", "text": "second", "cache_control": ["type": "ephemeral"]]]],
+        ])
+        let continued = try #require(AnthropicMessages.prepareThreadRequest(
+            model: model,
+            sessionId: sessionId,
+            body: next,
+            betas: betas
+        ))
+        #expect(continued.isContinuation)
+        #expect(continued.body["thread"] == ["type": "continue", "previous_message_id": "msg_1"])
+        #expect(continued.body["system"] == nil)
+        #expect(continued.body["tools"] == nil)
+        #expect(continued.body["messages"]?.arrayValue == [
+            ["role": "user", "content": [["type": "text", "text": "second", "cache_control": ["type": "ephemeral"]]]],
+        ])
+    }
+
+    @Test func startsANewThreadWhenAnEarlierMessageChanges() throws {
+        LLM.cleanupSessionResources()
+        let sessionId = "thread-\(UUID().uuidString)"
+        let first = body(messages: [["role": "user", "content": "first"]])
+        let created = try #require(AnthropicMessages.prepareThreadRequest(
+            model: model,
+            sessionId: sessionId,
+            body: first,
+            betas: betas
+        ))
+        var output = AssistantMessage(model: model)
+        output.responseId = "msg_1"
+        output.content = [.text(TextContent("answer"))]
+        output.stopReason = .stop
+        AnthropicMessages.recordThreadReply(
+            model: model,
+            thread: created,
+            body: first,
+            output: output,
+            isOAuth: false,
+            allowEmptySignature: false,
+            betas: betas
+        )
+
+        let rewritten = body(messages: [
+            ["role": "user", "content": "edited"],
+            ["role": "assistant", "content": [["type": "text", "text": "answer"]]],
+            ["role": "user", "content": "second"],
+        ])
+        let prepared = try #require(AnthropicMessages.prepareThreadRequest(
+            model: model,
+            sessionId: sessionId,
+            body: rewritten,
+            betas: betas
+        ))
+        #expect(!prepared.isContinuation)
+        #expect(prepared.body["thread"] == ["type": "create"])
+        #expect(prepared.body["messages"]?.arrayValue?.count == 3)
+    }
+}
+
 @Suite struct ModelTests {
     @Test func catalogDecodes() {
         let catalog = ModelCatalog.builtin
