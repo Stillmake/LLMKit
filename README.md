@@ -6,7 +6,7 @@
 
 One Swift API for streaming, tool calls, and reasoning across OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter and 30+ providers.
 
-LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,315 models).
+LLMKit is a Swift port of [pi-ai](https://github.com/badlogic/pi-mono/tree/main/packages/ai), the API layer of the pi coding agent. It has no dependencies (Foundation only). About forty providers reduce to five wire formats; each one has a single adapter, and per-provider differences are data (`ModelCompat` plus a bundled catalog of 1,353 models).
 
 ```swift
 import LLMKit
@@ -101,7 +101,7 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-LLMKit syncs with pi-mono periodically, not for every upstream release, so intermediate versions can be skipped. This snapshot ports pi-mono tag `v1.5.2`; OAuth login flows (`Sources/LLMKit/Auth/`) were reviewed through that tag, and the catalog comes from `@earendil-works/pi-ai` 1.5.2. LLMKit is not fully compatible with every other pi-ai version: check this pin before assuming an upstream feature or fix is present.
+LLMKit syncs with pi-mono periodically, not for every upstream release, so intermediate versions can be skipped. This snapshot ports pi-mono tag `v1.6.0`; OAuth login flows (`Sources/LLMKit/Auth/`) were reviewed through that tag, and the catalog comes from `@earendil-works/pi-ai` 1.6.0. LLMKit is not fully compatible with every other pi-ai version: check this pin before assuming an upstream feature or fix is present.
 
 LLMKit release tags are independent of pi-ai versions. Starting with this release, tags use the release date as `YYYY.M.D` with no zero padding (`2026.11.15`); an LLMKit tag is not a claim of parity with a pi-ai release.
 

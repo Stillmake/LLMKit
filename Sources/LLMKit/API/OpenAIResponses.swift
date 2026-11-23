@@ -39,14 +39,20 @@ enum OpenAIResponses {
         // rejects the cache-retention, output-cap and temperature fields.
         let isChatGPTSignIn = model.provider == "openai" && model.baseURL == "https://api.openai.com/v1"
             && !(options.apiKey ?? "sk-").hasPrefix("sk-")
+        // Changing the thinking level inside the conversation keeps the prompt cache: the request keeps
+        // a fixed effort and each turn's level travels as a `configuration_update` input item.
+        let configurationUpdateEffort = overrides.supportsMidConvoEffort == true && !isChatGPTSignIn
+            ? options.reasoning.flatMap { model.thinkingValue(for: $0) ?? $0.rawValue }
+            : nil
+        builder.message.providerThinkingLevel = configurationUpdateEffort
         var body: JSONObject = [
             "model": .string(model.id),
             "input": .array(OpenAIResponsesShared.convertMessages(
                 model: model,
                 messages: messages,
                 toolCallProviders: ["openai", "openai-codex", "opencode"],
-                includeSystemPrompt: true,
-                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages
+                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages,
+                configurationUpdateEffort: configurationUpdateEffort
             )),
             "stream": true,
             "store": false,
@@ -80,7 +86,10 @@ enum OpenAIResponses {
 
         if model.reasoning {
             if let effort = options.reasoning ?? (options.raw.reasoningSummary == nil ? nil : .medium) {
-                let value = options.reasoning.map { model.thinkingValue(for: $0) ?? $0.rawValue } ?? effort.rawValue
+                // A fixed effort keeps the cache while configuration_update items carry the level.
+                let value = configurationUpdateEffort == nil
+                    ? options.reasoning.flatMap { model.thinkingValue(for: $0) } ?? effort.rawValue
+                    : "medium"
                 body["reasoning"] = ["effort": .string(value), "summary": .string(options.raw.reasoningSummary ?? "auto")]
                 body["include"] = ["reasoning.encrypted_content"]
             } else if model.provider != "github-copilot", !model.thinkingLevelIsUnsupported(.off) {
@@ -143,6 +152,12 @@ enum OpenAICodexResponses {
         let supportsMidConvoSystemMessages = overrides.supportsMidConvoSystemMessages ?? false
         let messages = Transcript.resolve(transcript, supportsMidConvoSystemMessages: supportsMidConvoSystemMessages)
         let sessionId = options.raw.cacheRetention == .none ? nil : options.raw.sessionId
+        // Changing the thinking level, including switching to off, keeps the prompt cache: the request
+        // keeps a fixed effort and each turn's level travels as a `configuration_update` input item.
+        let configurationUpdateEffort = (overrides.supportsMidConvoEffort == true && model.reasoning)
+            ? options.reasoning.flatMap { model.thinkingValue(for: $0) } ?? model.thinkingValue(for: .off)
+            : nil
+        builder.message.providerThinkingLevel = configurationUpdateEffort
 
         var headers: [String: String?] = [
             // Codex expects an originator on every request; it is not attribution.
@@ -156,18 +171,16 @@ enum OpenAICodexResponses {
             headers["x-client-request-id"] = sessionId
         }
 
-        let instructions = Transcript.initialSystemMessage(messages)?.promptText ?? ""
         var body: JSONObject = [
             "model": .string(model.id),
             "store": false,
             "stream": true,
-            "instructions": .string(instructions.isEmpty ? "You are a helpful assistant." : instructions),
             "input": .array(OpenAIResponsesShared.convertMessages(
                 model: model,
                 messages: messages,
                 toolCallProviders: ["openai", "openai-codex", "opencode"],
-                includeSystemPrompt: false,
-                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages
+                supportsMidConvoSystemMessages: supportsMidConvoSystemMessages,
+                configurationUpdateEffort: configurationUpdateEffort
             )),
             "text": ["verbosity": .string(options.raw.textVerbosity ?? "low")],
             "include": ["reasoning.encrypted_content"],
@@ -175,6 +188,10 @@ enum OpenAICodexResponses {
             "parallel_tool_calls": true,
         ]
         if let sessionId { body["prompt_cache_key"] = .string(sessionId) }
+        if overrides.supportsMaxOutputTokens ?? true {
+            // The Responses API rejects max_output_tokens below 16.
+            body["max_output_tokens"] = .number(Double(max(options.maxTokens, 16)))
+        }
         if let temperature = options.raw.temperature { body["temperature"] = .number(temperature) }
         if let serviceTier = options.raw.serviceTier { body["service_tier"] = .string(serviceTier) }
         let tools = Transcript.currentTools(messages)
@@ -182,12 +199,17 @@ enum OpenAICodexResponses {
             body["tools"] = .array(try OpenAIResponsesShared.convertTools(
                 tools, defaultStrict: nil, supportsStrictMode: overrides.supportsStrictMode ?? true))
         }
-        if let effort = options.reasoning {
+        if configurationUpdateEffort != nil {
+            body["reasoning"] = ["effort": "medium", "summary": .string(options.raw.reasoningSummary ?? "auto")]
+        } else if let effort = options.reasoning {
             if let value = model.thinkingValue(for: effort) {
                 body["reasoning"] = ["effort": .string(value), "summary": .string(options.raw.reasoningSummary ?? "auto")]
             }
         } else if model.reasoning, !model.thinkingLevelIsUnsupported(.off) {
-            body["reasoning"] = ["effort": .string(model.thinkingValue(for: .off) ?? "none")]
+            body["reasoning"] = [
+                "effort": .string(model.thinkingValue(for: .off) ?? "none"),
+                "summary": .string(options.raw.reasoningSummary ?? "auto"),
+            ]
         }
 
         let payload = options.finalize(&body, model: model, applySamplingParams: false)

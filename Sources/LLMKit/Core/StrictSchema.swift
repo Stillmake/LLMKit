@@ -75,6 +75,10 @@ enum StrictSchema {
         if let keywordCheck, let entry = schema.first(where: { keywordCheck($0.key, $0.value) }) {
             throw Unsupported(reason: "\(entry.key): \(entry.value.jsonString()) is unsupported")
         }
+        // OpenAI strict mode rejects nodes without a type; a bare enum counts as typed, a bare const does not.
+        if schema["type"] == nil, schema["anyOf"] == nil, schema["enum"] == nil {
+            throw Unsupported(reason: "schemas without a type are unsupported")
+        }
 
         if let anyOf = schema["anyOf"] {
             guard case .array(let variants) = anyOf, !variants.isEmpty else {

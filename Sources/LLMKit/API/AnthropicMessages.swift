@@ -247,7 +247,7 @@ enum AnthropicMessages {
         let supportsEagerToolInputStreaming = overrides.supportsEagerToolInputStreaming ?? true
         let supportsLongCacheRetention = overrides.supportsLongCacheRetention ?? true
         let supportsMessageThreads = overrides.supportsMessageThreads
-            ?? (model.provider == "anthropic" && model.baseURL.contains("api.anthropic.com"))
+            ?? model.baseURL.contains("api.anthropic.com")
         let messages = Transcript.resolve(transcript, supportsMidConvoSystemMessages: supportsMidConvoSystemMessages)
         let tools = Transcript.currentTools(messages)
         if options.apiKey == nil, !options.hasAuthorizationHeader {
@@ -405,6 +405,12 @@ enum AnthropicMessages {
                     inputSchema["type"] = "object"
                     inputSchema["properties"] = parameters["properties"] ?? [:]
                     inputSchema["required"] = parameters["required"] ?? []
+                    // Keep shared definitions so property $refs still resolve, and additionalProperties so
+                    // the model knows whether extra arguments are allowed. Other root keywords stay out:
+                    // Anthropic rejects root anyOf/oneOf/allOf with a 400.
+                    if let additionalProperties = parameters["additionalProperties"] {
+                        inputSchema["additionalProperties"] = additionalProperties
+                    }
                     if let definitions = parameters["$defs"] { inputSchema["$defs"] = definitions }
                     if let definitions = parameters["definitions"] { inputSchema["definitions"] = definitions }
                     var definition: JSONObject = [

@@ -191,6 +191,9 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var supportsMidConvoSystemMessages: Bool?
     public var supportsStrictMode: Bool?
     public var supportsLongCacheRetention: Bool?
+    /// Thinking-level changes sent as `configuration_update` input items instead of a new
+    /// `reasoning.effort`, so a change keeps the prompt cache. Used by the Responses and Codex APIs.
+    public var supportsMidConvoEffort: Bool?
     public var sendSessionAffinityHeaders: Bool?
     public var sessionAffinityFormat: SessionAffinityFormat?
     public var promptCacheKeyMode: PromptCacheKeyMode?

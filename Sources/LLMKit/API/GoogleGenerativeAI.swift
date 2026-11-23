@@ -227,7 +227,9 @@ enum GoogleGenerativeAI {
                 builder.message.rawStopReason = reason
                 switch reason {
                 case "STOP": builder.message.stopReason = builder.hasToolCalls ? .toolUse : .stop
-                case "MAX_TOKENS": builder.message.stopReason = .length
+                // The per-request token limit was reached before generation completed; this adapter calls
+                // the REST API directly and never resumes with a continuation token.
+                case "MAX_TOKENS", "CONTINUATION": builder.message.stopReason = .length
                 default:
                     builder.message.stopReason = .error
                     builder.message.errorMessage = "Provider stopped with: \(reason)"

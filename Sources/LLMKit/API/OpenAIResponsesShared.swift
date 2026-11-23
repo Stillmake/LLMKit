@@ -15,8 +15,8 @@ enum OpenAIResponsesShared {
         model: Model,
         messages: [Message],
         toolCallProviders: Set<String>,
-        includeSystemPrompt: Bool,
-        supportsMidConvoSystemMessages: Bool
+        supportsMidConvoSystemMessages: Bool,
+        configurationUpdateEffort: String? = nil
     ) -> [JSONValue] {
         func normalizePart(_ part: String) -> String {
             var normalized = Transcript.sanitizeIdentifier(part)
@@ -45,10 +45,8 @@ enum OpenAIResponsesShared {
             switch message {
             case .system(let system):
                 let isLeading = sourceIndex == 0
-                if !isLeading || includeSystemPrompt {
-                    let text = isLeading ? system.promptText : system.updateText
-                    if !text.isEmpty { input.append(["role": instructionRole, "content": .string(text)]) }
-                }
+                let text = isLeading ? system.promptText : system.updateText
+                if !text.isEmpty { input.append(["role": instructionRole, "content": .string(text)]) }
                 if isLeading { continue }
 
             case .user(let user):
@@ -118,6 +116,9 @@ enum OpenAIResponsesShared {
                     }
                 }
                 guard !output.isEmpty else { continue }
+                if configurationUpdateEffort != nil, isSameModel, let providerThinkingLevel = assistant.providerThinkingLevel {
+                    input.append(["type": "configuration_update", "reasoning": ["effort": .string(providerThinkingLevel)]])
+                }
                 input += output
 
             case .toolResult(let result):
@@ -132,6 +133,9 @@ enum OpenAIResponsesShared {
                 input.append(["type": "function_call_output", "call_id": .string(callId), "output": output])
             }
             messageIndex += 1
+        }
+        if let configurationUpdateEffort {
+            input.append(["type": "configuration_update", "reasoning": ["effort": .string(configurationUpdateEffort)]])
         }
         return input
     }
@@ -203,6 +207,7 @@ enum OpenAIResponsesShared {
 
         func finalize(_ response: JSONValue?) {
             sawTerminalEvent = true
+            appendReasoningRemovals(response?["input_transformations"], to: &builder.message)
             // Azure can omit encrypted reasoning from output_item.done and only send it here;
             // backfill it so store:false multi-turn replay stays stateless.
             for item in response?["output"]?.arrayValue ?? [] where item["type"] == "reasoning" {
@@ -350,5 +355,33 @@ enum OpenAIResponsesShared {
                 "OpenAI Responses stream completed with an unfinished tool call: \(unfinished.toolName) (\(unfinished.toolCallId))"
             )
         }
+    }
+
+    /// Records the replayed reasoning items the API withheld from the model, with the reason for each.
+    ///
+    /// From GPT-6.2 on, OpenAI removes reasoning that follows an edit of earlier input (`prefix_mismatch`)
+    /// and reasoning created under another organization, end user, or model. A removal is reported again
+    /// on every later request that replays the item.
+    ///
+    /// `turn_boundary` removals are left out: models that use only current-turn reasoning (all models
+    /// before GPT-5.6) report every earlier turn's reasoning item on every request. That is their normal
+    /// behavior, and storing it would grow the session quadratically with the conversation.
+    static func appendReasoningRemovals(_ transformations: JSONValue?, to output: inout AssistantMessage) {
+        // Wire input: older servers and proxies omit the field, and Codex tolerates malformed entries too.
+        guard case .array(let entries)? = transformations else { return }
+        let removals = entries.compactMap { entry -> JSONValue? in
+            guard entry["type"] == "reasoning", entry["action"] == "removed", entry["reason"] != "turn_boundary"
+            else { return nil }
+            var projection: JSONObject = [:]
+            for key in ["type", "id", "action", "reason"] {
+                if let value = entry[key] { projection[key] = value }
+            }
+            return .object(projection)
+        }
+        guard !removals.isEmpty else { return }
+        output.diagnostics = (output.diagnostics ?? []) + [AssistantMessageDiagnostic(
+            type: "openai_input_transformations",
+            details: ["transformations": .array(removals)]
+        )]
     }
 }

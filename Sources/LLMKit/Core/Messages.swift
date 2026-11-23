@@ -234,6 +234,35 @@ public struct UserMessage: Codable, Sendable, Hashable {
     }
 }
 
+/// A redacted provider or runtime diagnostic kept on an assistant message.
+public struct AssistantMessageDiagnostic: Codable, Sendable, Hashable {
+    public struct ErrorInfo: Codable, Sendable, Hashable {
+        public var name: String?
+        public var message: String
+        public var stack: String?
+        public var code: JSONValue?
+
+        public init(name: String? = nil, message: String, stack: String? = nil, code: JSONValue? = nil) {
+            self.name = name
+            self.message = message
+            self.stack = stack
+            self.code = code
+        }
+    }
+
+    public var type: String
+    public var timestamp: Date
+    public var error: ErrorInfo?
+    public var details: JSONObject?
+
+    public init(type: String, timestamp: Date = .now, error: ErrorInfo? = nil, details: JSONObject? = nil) {
+        self.type = type
+        self.timestamp = timestamp
+        self.error = error
+        self.details = details
+    }
+}
+
 public struct AssistantMessage: Codable, Sendable, Hashable {
     public var content: [AssistantContent]
     public var api: API
@@ -242,11 +271,16 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
     /// Concrete model reported by the provider when it differs from `model`.
     public var responseModel: String?
     public var responseId: String?
+    /// Exact provider-native effort level used for this response, when the request carried it inside
+    /// the conversation. Absent for legacy responses and when the effort was sent as `reasoning.effort`.
+    public var providerThinkingLevel: String?
     public var usage: Usage
     public var stopReason: StopReason
     public var errorMessage: String?
     /// The provider's own stop reason, for diagnostics.
     public var rawStopReason: String?
+    /// Provider or runtime diagnostics recorded for failures and recoveries.
+    public var diagnostics: [AssistantMessageDiagnostic]?
     public var timestamp: Date
     /// Time from request start until the response ended.
     public var duration: Duration?

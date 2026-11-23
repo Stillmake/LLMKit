@@ -64,6 +64,95 @@ import Testing
     }
 }
 
+/// Ports pi-ai 1.6.0's constrained-sampling, compat, and Responses conversion behavior.
+@Suite struct Upstream160Tests {
+    @Test func strictSchemasRequireATypeUnlessTheyHaveAnyOfOrAnEnum() throws {
+        func resolve(_ property: JSONValue, strict mode: Tool.StrictMode = .prefer) throws -> Bool? {
+            let tool = Tool(
+                name: "t", description: "",
+                parameters: ["type": "object", "properties": ["value": property]], strict: mode)
+            return try StrictSchema.resolve(tool, supportsStrictMode: true)
+        }
+        #expect(try resolve(["enum": ["a", "b"]]) == true)
+        #expect(try resolve(["anyOf": [["type": "string"], ["type": "null"]]]) == true)
+        // A bare const counts as untyped and falls back to non-strict mode, or fails when required.
+        #expect(try resolve(["const": "a"]) == nil)
+        #expect(throws: LLMError.self) { try resolve([:], strict: .require) }
+    }
+
+    @Test func sendsTheDeveloperRoleOnlyToOpenAIsAPI() {
+        func supportsDeveloperRole(_ provider: String, _ baseURL: String, compat: ModelCompat? = nil) -> Bool {
+            let model = Model(
+                id: "m", api: .openAICompletions, provider: provider, baseURL: baseURL, reasoning: true, compat: compat)
+            return OpenAICompletions.Compat(model: model).supportsDeveloperRole
+        }
+        #expect(supportsDeveloperRole("openai", "https://api.openai.com/v1"))
+        #expect(!supportsDeveloperRole("azure", "https://acme.openai.azure.com/openai/v1"))
+        #expect(!supportsDeveloperRole("openrouter", "https://openrouter.ai/api/v1"))
+        #expect(!supportsDeveloperRole("groq", "https://api.groq.com/openai/v1"))
+        var forced = ModelCompat()
+        forced.supportsDeveloperRole = true
+        #expect(supportsDeveloperRole("groq", "https://api.groq.com/openai/v1", compat: forced))
+    }
+
+    @Test func responsesSendTheSystemPromptAsALeadingDeveloperItem() {
+        let model = Model(
+            id: "gpt-6.2-sol", api: .openAICodexResponses, provider: "openai-codex",
+            baseURL: "https://chatgpt.com/backend-api", reasoning: true)
+        let messages = Transcript.normalize(
+            Context(systemPrompt: "Be terse.", messages: [.user(UserMessage("hi"))]))
+        let input = OpenAIResponsesShared.convertMessages(
+            model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
+            supportsMidConvoSystemMessages: false)
+        #expect(input == [
+            ["role": "developer", "content": "Be terse."],
+            ["role": "user", "content": [["type": "input_text", "text": "hi"]]],
+        ])
+    }
+
+    @Test func replaysThinkingLevelsAsConfigurationUpdates() {
+        let model = Model(
+            id: "gpt-6.2-sol", api: .openAIResponses, provider: "openai",
+            baseURL: "https://api.openai.com/v1", reasoning: true)
+        var previous = AssistantMessage(model: model)
+        previous.content = [.text(TextContent("answer"))]
+        previous.stopReason = .stop
+        previous.providerThinkingLevel = "low"
+        let messages = Transcript.normalize(Context(messages: [
+            .user(UserMessage("first")), .assistant(previous), .user(UserMessage("second")),
+        ]))
+        let input = OpenAIResponsesShared.convertMessages(
+            model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
+            supportsMidConvoSystemMessages: false, configurationUpdateEffort: "high")
+        #expect(input.map { $0["role"]?.stringValue ?? $0["type"]?.stringValue }
+            == ["user", "configuration_update", "assistant", "user", "configuration_update"])
+        #expect(input[1] == ["type": "configuration_update", "reasoning": ["effort": "low"]])
+        #expect(input.last == ["type": "configuration_update", "reasoning": ["effort": "high"]])
+        // Without the feature the effort stays in the request and no items are replayed.
+        let plain = OpenAIResponsesShared.convertMessages(
+            model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
+            supportsMidConvoSystemMessages: false)
+        #expect(plain.allSatisfy { $0["type"] != "configuration_update" })
+    }
+
+    @Test func recordsWithheldReasoningAsDiagnostics() throws {
+        var output = AssistantMessage(model: Model(
+            id: "gpt-6.2-sol", api: .openAIResponses, provider: "openai", baseURL: "https://api.openai.com/v1"))
+        OpenAIResponsesShared.appendReasoningRemovals([
+            ["type": "reasoning", "id": "rs_edited", "action": "removed", "reason": "prefix_mismatch"],
+            ["type": "reasoning", "id": "rs_old", "action": "removed", "reason": "turn_boundary"],
+            ["type": "message", "id": "msg_1", "action": "removed", "reason": "prefix_mismatch"],
+        ], to: &output)
+        let diagnostic = try #require(output.diagnostics?.first)
+        #expect(output.diagnostics?.count == 1)
+        #expect(diagnostic.type == "openai_input_transformations")
+        let removals = try #require(diagnostic.details?["transformations"]?.arrayValue)
+        #expect(removals.map { $0["id"]?.stringValue } == ["rs_edited"])
+        OpenAIResponsesShared.appendReasoningRemovals(.array([]), to: &output)
+        #expect(output.diagnostics?.count == 1)
+    }
+}
+
 @Suite struct PartialJSONTests {
     @Test func parsesCompleteJSON() {
         #expect(PartialJSON.parseObject(#"{"path": "a.txt", "line": 3}"#) == ["path": "a.txt", "line": 3])
@@ -524,5 +613,196 @@ final class CapturingURLProtocol: URLProtocol, @unchecked Sendable {
         #expect(try await send(model, StreamOptions(sessionId: "session-1")).value(forHTTPHeaderField: "x-opencode-session") == "session-1")
         let configured = try await send(model, StreamOptions(headers: ["X-OpenCode-Session": "configured"], sessionId: "session-1"))
         #expect(configured.value(forHTTPHeaderField: "x-opencode-session") == "configured")
+    }
+}
+
+/// Answers every request with the given SSE payload and records it, so adapter tests can assert the
+/// wire request (pi-ai's `capturingFetch`, which Swift's URLProtocol needs for streaming bodies).
+final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var payload = ""
+    nonisolated(unsafe) static var captured: URLRequest?
+
+    static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubSSEURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    /// The body of the captured request; URLSession hands URLProtocol a stream instead of data.
+    static func capturedJSON() throws -> JSONValue {
+        let request = try #require(captured)
+        var data = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(buffer, count: count)
+            }
+        }
+        return try JSONValue(parsing: String(decoding: data, as: UTF8.self))
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.captured = request
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["content-type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(Self.payload.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// Ports pi-ai 1.6.0's request-shape tests through the real adapters.
+@Suite(.serialized) struct Upstream160RequestTests {
+    let context = Context(systemPrompt: "Be terse.", messages: [.user(UserMessage("Say hello"))])
+
+    func send(_ model: Model, context: Context, options: StreamOptions) async throws -> AssistantMessage {
+        StubSSEURLProtocol.captured = nil
+        var options = options
+        options.apiKey = options.apiKey ?? "key"
+        options.session = StubSSEURLProtocol.session()
+        return try await LLM.complete(model: model, context: context, options: options)
+    }
+
+    /// A ChatGPT OAuth token whose claims carry the account id.
+    var chatGPTToken: String {
+        let claims = Data(#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct"}}"#.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "header.\(claims).signature"
+    }
+
+    @Test func codexSendsTheSystemPromptAsADeveloperItemAndLevelsInsideTheConversation() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}
+
+            """#
+        var compat = ModelCompat()
+        compat.supportsMidConvoEffort = true
+        let model = Model(
+            id: "gpt-6.2-sol", api: .openAICodexResponses, provider: "openai-codex",
+            baseURL: "https://chatgpt.com/backend-api", reasoning: true,
+            contextWindow: 400_000, maxTokens: 128_000, compat: compat)
+        let message = try await send(
+            model, context: context,
+            options: StreamOptions(apiKey: chatGPTToken, maxTokens: 5_000, reasoning: .high))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["instructions"] == nil)
+        #expect(request["max_output_tokens"] == 5000)
+        #expect(request["reasoning"] == ["effort": "medium", "summary": "auto"])
+        #expect(request["input"]?.arrayValue?.first == ["role": "developer", "content": "Be terse."])
+        #expect(request["input"]?.arrayValue?.last
+            == ["type": "configuration_update", "reasoning": ["effort": "high"]])
+        #expect(message.providerThinkingLevel == "high")
+        #expect(message.stopReason == .stop)
+    }
+
+    @Test func responsesReplaysProviderThinkingLevelsAsConfigurationUpdates() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}
+
+            """#
+        var compat = ModelCompat()
+        compat.supportsMidConvoEffort = true
+        let model = Model(
+            id: "gpt-6.2-sol", api: .openAIResponses, provider: "openai",
+            baseURL: "https://api.openai.com/v1", reasoning: true,
+            contextWindow: 272_000, maxTokens: 128_000, compat: compat)
+        var previous = AssistantMessage(model: model)
+        previous.content = [.text(TextContent("answer"))]
+        previous.stopReason = .stop
+        previous.providerThinkingLevel = "low"
+        let history = Context(systemPrompt: "Be terse.", messages: [
+            .user(UserMessage("first")), .assistant(previous), .user(UserMessage("second")),
+        ])
+        let message = try await send(model, context: history, options: StreamOptions(apiKey: "sk-key", reasoning: .high))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["reasoning"] == ["effort": "medium", "summary": "auto"])
+        #expect(request["input"]?.arrayValue?.map { $0["role"]?.stringValue ?? $0["type"]?.stringValue }
+            == ["developer", "user", "configuration_update", "assistant", "user", "configuration_update"])
+        #expect(message.providerThinkingLevel == "high")
+    }
+
+    @Test func responsesKeepTheEffortInTheRequestWithoutMidConversationEffort() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}
+
+            """#
+        let model = Model(
+            id: "gpt-6.2-sol", api: .openAIResponses, provider: "openai",
+            baseURL: "https://api.openai.com/v1", reasoning: true)
+        let message = try await send(model, context: context, options: StreamOptions(apiKey: "sk-key", reasoning: .high))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["reasoning"] == ["effort": "high", "summary": "auto"])
+        #expect(request["input"]?.arrayValue?.allSatisfy { $0["type"] != "configuration_update" } == true)
+        #expect(message.providerThinkingLevel == nil)
+    }
+
+    @Test func anthropicNonStrictToolSchemasKeepRootAdditionalProperties() async throws {
+        StubSSEURLProtocol.payload = #"""
+            event: message_start
+            data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}
+
+            event: message_delta
+            data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+            event: message_stop
+            data: {"type":"message_stop"}
+
+            """#
+        let model = Model(
+            id: "claude-test", api: .anthropicMessages, provider: "anthropic",
+            baseURL: "https://api.anthropic.com", maxTokens: 100)
+        let tool = Tool(name: "lookup", description: "", parameters: [
+            "type": "object",
+            "properties": ["q": ["type": "string"]],
+            "required": ["q"],
+            "additionalProperties": false,
+        ])
+        let message = try await send(
+            model, context: Context(messages: [.user(UserMessage("hi"))], tools: [tool]),
+            options: StreamOptions(apiKey: "key"))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["tools"]?[0]?["input_schema"]?["additionalProperties"] == false)
+        #expect(message.stopReason == .stop)
+    }
+
+    @Test func googleMapsContinuationToLength() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"candidates":[{"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"CONTINUATION"}]}
+
+            """#
+        let model = Model(
+            id: "gemini-test", api: .googleGenerativeAI, provider: "google",
+            baseURL: "https://generativelanguage.googleapis.com/v1beta")
+        let message = try await send(
+            model, context: Context(messages: [.user(UserMessage("hello"))]), options: StreamOptions(apiKey: "key"))
+        #expect(message.stopReason == .length)
+    }
+
+    @Test func chatCompletionsReadsTopLevelReasoningTokens() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"ok"},"finish_reason":null,"index":0}]}
+
+            data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":10,"completion_tokens":5,"reasoning_tokens":3}}
+
+            data: [DONE]
+
+            """#
+        let model = Model(id: "m", api: .openAICompletions, provider: "openai", baseURL: "https://api.openai.com/v1")
+        let message = try await send(
+            model, context: Context(messages: [.user(UserMessage("hello"))]), options: StreamOptions(apiKey: "key"))
+        #expect(message.usage.reasoning == 3)
+        #expect(message.usage.output == 5)
     }
 }

@@ -54,13 +54,15 @@ enum OpenAICompletions {
             let isNonStandard = isNvidia || isCerebras || isGrok || isTogether || isChutes || isDeepSeek || isZai
                 || isMoonshot || isOpenCode || isCloudflareWorkersAI || isCloudflareGateway || isAntLing
             let usesMaxTokens = isChutes || isDeepSeek || isMoonshot || isCloudflareGateway || isTogether || isNvidia || isAntLing || isZai
-            let isOpenRouterDeveloperRoleModel = isOpenRouter && (model.id.hasPrefix("anthropic/") || model.id.hasPrefix("openai/"))
+            // The developer role is OpenAI's. Other hosts' chat templates often reject it (#10741),
+            // and every host accepts system, so only OpenAI's own API gets developer by default.
+            let isOpenAI = provider == "openai" || url.contains("api.openai.com")
             let detectedFormat: ThinkingFormat =
                 isDeepSeek ? .deepSeek : isZai ? .zai : isTogether ? .together : isAntLing ? .antLing : isOpenRouter ? .openRouter : .openAI
 
             let overrides = model.compat ?? ModelCompat()
             supportsStore = overrides.supportsStore ?? !isNonStandard
-            supportsDeveloperRole = overrides.supportsDeveloperRole ?? (isOpenRouterDeveloperRoleModel || (!isNonStandard && !isOpenRouter))
+            supportsDeveloperRole = overrides.supportsDeveloperRole ?? isOpenAI
             supportsReasoningEffort = overrides.supportsReasoningEffort
                 ?? !(isGrok || isZai || isMoonshot || isTogether || isCloudflareGateway || isNvidia || isAntLing)
             supportsUsageInStreaming = overrides.supportsUsageInStreaming ?? true
@@ -263,7 +265,9 @@ enum OpenAICompletions {
         usage.output = raw["completion_tokens"]?.intValue ?? 0
         usage.cacheRead = cacheRead
         usage.cacheWrite = cacheWrite
-        usage.reasoning = raw["completion_tokens_details"]?["reasoning_tokens"]?.intValue ?? 0
+        // Some hosts report reasoning tokens at the top level of usage instead of in the details.
+        let reasoning = raw["completion_tokens_details"]?["reasoning_tokens"]?.intValue ?? 0
+        usage.reasoning = reasoning != 0 ? reasoning : raw["reasoning_tokens"]?.intValue ?? 0
         usage.totalTokens = usage.input + usage.output + cacheRead + cacheWrite
         usage.applyCost(of: model)
         if model.provider == "openrouter" || model.baseURL.contains("openrouter.ai") {
