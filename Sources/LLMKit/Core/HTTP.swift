@@ -144,10 +144,8 @@ enum HTTP {
                 guard let response = response as? HTTPURLResponse else {
                     throw LLMError.protocolViolation("Non-HTTP response")
                 }
-                if (200..<300).contains(response.statusCode) {
-                    options.raw.onResponse?(response, model)
-                    return bytes
-                }
+                options.raw.onResponse?(response, model)
+                if (200..<300).contains(response.statusCode) { return bytes }
                 var body = Data()
                 for try await byte in bytes {
                     body.append(byte)
@@ -203,7 +201,9 @@ enum HTTP {
         }
         let error = json["error"]
         if let message = error?["message"]?.stringValue {
-            let code = error?["code"]?.stringValue ?? error?["type"]?.stringValue ?? error?["status"]?.stringValue
+            let providerCode = error?["code"]
+            let code = providerCode?.stringValue ?? providerCode?.intValue.map { String($0) }
+                ?? error?["type"]?.stringValue ?? error?["status"]?.stringValue
             let raw = error?["metadata"]?["raw"]?.stringValue
             return [code.map { "\($0): \(message)" } ?? message, raw].compactMap { $0 }.joined(separator: "\n")
         }

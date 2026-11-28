@@ -152,7 +152,7 @@ public struct ThinkingFormat: RawRepresentable, Codable, Sendable, Hashable, Exp
     public static let qwenChatTemplate: Self = "qwen-chat-template"
     /// Top-level string `thinking`.
     public static let stringThinking: Self = "string-thinking"
-    /// `reasoning: {effort}` only when the mapped effort exists.
+    /// Deprecated wire format name. The Completions adapter handles it as `deepSeek`.
     public static let antLing: Self = "ant-ling"
 }
 
@@ -232,6 +232,8 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var supportsMaxOutputTokens: Bool?
 
     // Anthropic Messages
+    /// Allows native tool changes when mid-conversation system messages are also supported.
+    public var supportsMidConvoToolChanges: Bool?
     public var supportsEagerToolInputStreaming: Bool?
     public var supportsCacheControlOnTools: Bool?
     public var supportsTemperature: Bool?

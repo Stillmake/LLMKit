@@ -103,7 +103,7 @@ import Testing
             Context(systemPrompt: "Be terse.", messages: [.user(UserMessage("hi"))]))
         let input = OpenAIResponsesShared.convertMessages(
             model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
-            supportsMidConvoSystemMessages: false)
+            supportsMidConvoSystemMessages: false).input
         #expect(input == [
             ["role": "developer", "content": "Be terse."],
             ["role": "user", "content": [["type": "input_text", "text": "hi"]]],
@@ -123,7 +123,7 @@ import Testing
         ]))
         let input = OpenAIResponsesShared.convertMessages(
             model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
-            supportsMidConvoSystemMessages: false, configurationUpdateEffort: "high")
+            supportsMidConvoSystemMessages: false, configurationUpdateEffort: "high").input
         #expect(input.map { $0["role"]?.stringValue ?? $0["type"]?.stringValue }
             == ["user", "configuration_update", "assistant", "user", "configuration_update"])
         #expect(input[1] == ["type": "configuration_update", "reasoning": ["effort": "low"]])
@@ -131,7 +131,7 @@ import Testing
         // Without the feature the effort stays in the request and no items are replayed.
         let plain = OpenAIResponsesShared.convertMessages(
             model: model, messages: messages, toolCallProviders: ["openai", "openai-codex", "opencode"],
-            supportsMidConvoSystemMessages: false)
+            supportsMidConvoSystemMessages: false).input
         #expect(plain.allSatisfy { $0["type"] != "configuration_update" })
     }
 
@@ -682,7 +682,7 @@ final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
         return "header.\(claims).signature"
     }
 
-    @Test func codexSendsTheSystemPromptAsADeveloperItemAndLevelsInsideTheConversation() async throws {
+    @Test func codexPinsTheInitialEffortAndReplaysOnlyChanges() async throws {
         StubSSEURLProtocol.payload = #"""
             data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}
 
@@ -699,12 +699,26 @@ final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
         let request = try StubSSEURLProtocol.capturedJSON()
         #expect(request["instructions"] == nil)
         #expect(request["max_output_tokens"] == 5000)
-        #expect(request["reasoning"] == ["effort": "medium", "summary": "auto"])
+        #expect(request["reasoning"] == ["effort": "high", "summary": "auto"])
         #expect(request["input"]?.arrayValue?.first == ["role": "developer", "content": "Be terse."])
-        #expect(request["input"]?.arrayValue?.last
-            == ["type": "configuration_update", "reasoning": ["effort": "high"]])
+        #expect(request["input"]?.arrayValue?.contains { $0["type"] == "configuration_update" } == false)
         #expect(message.providerThinkingLevel == "high")
         #expect(message.stopReason == .stop)
+
+        var previous = AssistantMessage(model: model)
+        previous.content = [.toolCall(ToolCall(id: "call_1|fc_1", name: "lookup", arguments: [:]))]
+        previous.providerThinkingLevel = "low"
+        previous.stopReason = .toolUse
+        let history = Context(messages: [
+            .user(UserMessage("first")), .assistant(previous), .user(UserMessage("second")),
+        ])
+        _ = try await send(model, context: history, options: StreamOptions(apiKey: chatGPTToken, reasoning: .high))
+        let replay = try StubSSEURLProtocol.capturedJSON()
+        let input = try #require(replay["input"]?.arrayValue)
+        #expect(replay["reasoning"] == ["effort": "low", "summary": "auto"])
+        #expect(input.first { $0["type"] == "function_call" }?["status"] == "completed")
+        #expect(input.filter { $0["type"] == "configuration_update" }
+            == [["type": "configuration_update", "reasoning": ["effort": "high"]]])
     }
 
     @Test func responsesReplaysProviderThinkingLevelsAsConfigurationUpdates() async throws {
@@ -765,6 +779,7 @@ final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
             baseURL: "https://api.anthropic.com", maxTokens: 100)
         let tool = Tool(name: "lookup", description: "", parameters: [
             "type": "object",
+            "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": ["q": ["type": "string"]],
             "required": ["q"],
             "additionalProperties": false,
@@ -774,7 +789,106 @@ final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
             options: StreamOptions(apiKey: "key"))
         let request = try StubSSEURLProtocol.capturedJSON()
         #expect(request["tools"]?[0]?["input_schema"]?["additionalProperties"] == false)
+        #expect(request["tools"]?[0]?["input_schema"]?["$schema"] == "http://json-schema.org/draft-07/schema#")
         #expect(message.stopReason == .stop)
+    }
+
+    @Test func anthropicReplaysNativeToolChangesWithStableInitialTools() async throws {
+        StubSSEURLProtocol.payload = #"""
+            event: message_start
+            data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}
+
+            event: message_delta
+            data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+            event: message_stop
+            data: {"type":"message_stop"}
+
+            """#
+        var compat = ModelCompat()
+        compat.supportsMidConvoSystemMessages = true
+        compat.supportsMidConvoToolChanges = true
+        let model = Model(id: "claude-test", api: .anthropicMessages, provider: "anthropic",
+            baseURL: "https://api.anthropic.com", compat: compat)
+        let schema: JSONValue = ["type": "object", "properties": [:]]
+        let lookup = Tool(name: "lookup", description: "Initial definition", parameters: schema)
+        let search = Tool(name: "search", description: "", parameters: schema)
+        let replacement = Tool(name: "lookup", description: "Updated definition", parameters: schema)
+        let options = StreamOptions(cacheRetention: .short)
+
+        let initial = Context(messages: [.user(UserMessage("Find it"))], tools: [lookup, search])
+        _ = try await send(model, context: initial, options: options)
+        let before = try StubSSEURLProtocol.capturedJSON()
+        #expect(before["tools"]?[2]?["name"] == "__pi_deferred_placeholder__")
+        #expect(before["tools"]?[2]?["defer_loading"] == true)
+        #expect(before["tools"]?[1]?["cache_control"]?["type"] == "ephemeral")
+
+        var assistant = AssistantMessage(model: model)
+        assistant.stopReason = .toolUse
+        assistant.content = [.toolCall(ToolCall(id: "call_1", name: "search", arguments: [:]))]
+        let update = SystemMessage("", toolsAdded: [replacement], toolsRemoved: ["search", "lookup"])
+        let result = ToolResultMessage(toolCallId: "call_1", toolName: "search", content: [.text(TextContent("found"))])
+        let history = initial.messages + [.assistant(assistant), .system(update), .toolResult(result)]
+        let changed = Context(messages: history, tools: initial.tools)
+        _ = try await send(model, context: changed, options: options)
+        let after = try StubSSEURLProtocol.capturedJSON()
+        let beta = StubSSEURLProtocol.captured?.value(forHTTPHeaderField: "anthropic-beta")
+        let messages = try #require(after["messages"]?.arrayValue)
+        #expect(beta?.contains("inline-tools-2026-09-15") == true)
+        #expect(after["tools"] == before["tools"])
+        #expect(messages.map { $0["role"]?.stringValue } == ["user", "assistant", "user", "system"])
+        #expect(messages.dropLast().last?["content"]?[0]?["type"] == "tool_result")
+        let updates = try #require(messages.last?["content"]?.arrayValue)
+        #expect(updates.map { $0["type"]?.stringValue } == ["tool_removal", "tool_addition"])
+        #expect(updates.first?["tool"] == ["type": "tool_reference", "name": "search"])
+        #expect(updates.last?["tool"]?["definition"]?["description"] == "Updated definition")
+        #expect(updates.last?["cache_control"]?["type"] == "ephemeral")
+
+        let unanchored = Context(systemPrompt: "Be brief.", messages: initial.messages + [.system(update)])
+        _ = try await send(model, context: unanchored, options: options)
+        let fallback = try StubSSEURLProtocol.capturedJSON()
+        #expect(StubSSEURLProtocol.captured?.value(forHTTPHeaderField: "anthropic-beta") == nil)
+        #expect(fallback["tools"]?.arrayValue?.count == 1)
+        #expect(fallback["tools"]?[0]?["description"] == "Updated definition")
+        #expect(fallback["messages"]?.arrayValue?.count == 1)
+    }
+
+    @Test func anthropicOAuthRecoversTheCallerNameForAnAddedTool() async throws {
+        StubSSEURLProtocol.payload = #"""
+            event: message_start
+            data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}
+
+            event: content_block_start
+            data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}}
+
+            event: content_block_stop
+            data: {"type":"content_block_stop","index":0}
+
+            event: message_delta
+            data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}
+
+            event: message_stop
+            data: {"type":"message_stop"}
+
+            """#
+        var compat = ModelCompat()
+        compat.supportsMidConvoSystemMessages = true
+        compat.supportsMidConvoToolChanges = true
+        let model = Model(id: "claude-test", api: .anthropicMessages, provider: "anthropic",
+            baseURL: "https://api.anthropic.com", compat: compat)
+        let schema: JSONValue = ["type": "object", "properties": [:]]
+        let lookup = Tool(name: "lookup", description: "", parameters: schema)
+        let read = Tool(name: "read", description: "", parameters: schema)
+        let history = Context(messages: [
+            .user(UserMessage("Read it")), .system(SystemMessage("", toolsAdded: [read])),
+        ], tools: [lookup])
+
+        let reply = try await send(model, context: history, options: StreamOptions(apiKey: "sk-ant-oat-test"))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["tools"]?.arrayValue?.map { $0["name"]?.stringValue } == ["lookup", "__pi_deferred_placeholder__"])
+        #expect(request["messages"]?.arrayValue?.last?["content"]?[0]?["tool"]?["definition"]?["name"] == "Read")
+        #expect(reply.stopReason == .toolUse)
+        #expect(reply.toolCalls.map(\.name) == ["read"])
     }
 
     @Test func googleMapsContinuationToLength() async throws {
@@ -804,5 +918,60 @@ final class StubSSEURLProtocol: URLProtocol, @unchecked Sendable {
             model, context: Context(messages: [.user(UserMessage("hello"))]), options: StreamOptions(apiKey: "key"))
         #expect(message.usage.reasoning == 3)
         #expect(message.usage.output == 5)
+    }
+
+    @Test(arguments: [false, true])
+    func chatCompletionsReplaysLatestCopilotOpaqueReasoning(withText: Bool) async throws {
+        let firstDelta: JSONValue = withText
+            ? ["reasoning_opaque": "old", "reasoning_text": "thought"]
+            : ["reasoning_opaque": "old"]
+        StubSSEURLProtocol.payload = """
+            data: {"choices":[{"delta":\(firstDelta.jsonString())}]}
+
+            data: {"choices":[{"delta":{"reasoning_opaque":"new"}}]}
+
+            data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}
+
+            """
+        let model = Model(id: "m", api: .openAICompletions, provider: "github-copilot", baseURL: "https://api.individual.githubcopilot.com")
+        let message = try await send(model, context: context, options: StreamOptions())
+        #expect(message.stopReason == .stop)
+        let history = Context(messages: context.messages + [.assistant(message), .user(UserMessage("continue"))])
+        _ = try await send(model, context: history, options: StreamOptions())
+        let request = try StubSSEURLProtocol.capturedJSON()
+        let replay = try #require(request["messages"]?.arrayValue?.first { $0["role"] == "assistant" })
+        #expect(replay["reasoning_opaque"] == "new")
+        #expect(replay["reasoning_text"]?.stringValue == (withText ? "thought" : nil))
+    }
+
+    @Test func openRouterReportsAnEmptyStopWithAFailingNativeReason() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"choices":[{"delta":{"reasoning":"thinking"},"native_finish_reason":"MALFORMED_RESPONSE","finish_reason":"stop"}]}
+
+            data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+            """#
+        let model = Model(id: "m", api: .openAICompletions, provider: "openrouter", baseURL: "https://openrouter.ai/api/v1")
+        let message = try await send(model, context: context, options: StreamOptions())
+        #expect(message.stopReason == .error)
+        #expect(message.rawStopReason == "stop.MALFORMED_RESPONSE")
+        #expect(message.errorMessage == "OpenRouter returned an empty response (native_finish_reason: MALFORMED_RESPONSE)")
+        #expect(LLM.isRetryableAssistantError(message))
+    }
+
+    @Test func googleReportsPromptBlocksAndSendsXHighForPrefixedGemini() async throws {
+        StubSSEURLProtocol.payload = #"""
+            data: {"promptFeedback":{"blockReason":"SAFETY","safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH"}]}}
+
+            """#
+        let model = Model(
+            id: "vendor-gemini-4-hydrogen", api: .googleGenerativeAI, provider: "google",
+            baseURL: "https://generativelanguage.googleapis.com/v1beta", reasoning: true,
+            thinkingLevelMap: ThinkingLevelMap([.xhigh: .value("xhigh")]))
+        let message = try await send(model, context: context, options: StreamOptions(reasoning: .xhigh))
+        let request = try StubSSEURLProtocol.capturedJSON()
+        #expect(request["generationConfig"]?["thinkingConfig"]?["thinkingLevel"] == "XHIGH")
+        #expect(message.stopReason == .error)
+        #expect(message.errorMessage == "Google prompt blocked: SAFETY. Safety rating: HARM_CATEGORY_DANGEROUS_CONTENT (HIGH)")
     }
 }

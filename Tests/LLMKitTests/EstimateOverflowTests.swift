@@ -72,6 +72,8 @@ import Testing
         var message = assistant(0, 0)
         message.stopReason = .error; message.errorMessage = "Throttling error: Too many tokens, please wait before trying again."
         #expect(!LLM.isContextOverflow(message))
+        message.errorMessage = "plugin_request_too_large"
+        #expect(!LLM.isContextOverflow(message))
         message.errorMessage = "400 status code (no body)"; message.provider = "cerebras"
         #expect(LLM.isContextOverflow(message))
         message.provider = "other"; #expect(!LLM.isContextOverflow(message))

@@ -5,7 +5,7 @@ import Foundation
 enum OpenAIResponsesShared {
     // MARK: Messages
 
-    /// Converts the transcript to Responses `input` items.
+    /// Converts the transcript to Responses `input` items and returns the initial effort for Codex.
     ///
     /// Reasoning items replay verbatim (from `thinkingSignature`) for the same model, assistant text
     /// keeps its message id and phase, and tool-call ids are `{call_id}|{item_id}`. Item ids from a
@@ -16,8 +16,9 @@ enum OpenAIResponsesShared {
         messages: [Message],
         toolCallProviders: Set<String>,
         supportsMidConvoSystemMessages: Bool,
-        configurationUpdateEffort: String? = nil
-    ) -> [JSONValue] {
+        configurationUpdateEffort: String? = nil,
+        pinInitialEffort: Bool = false
+    ) -> (input: [JSONValue], initialEffort: String?) {
         func normalizePart(_ part: String) -> String {
             var normalized = Transcript.sanitizeIdentifier(part)
             while normalized.hasSuffix("_") { normalized.removeLast() }
@@ -40,6 +41,19 @@ enum OpenAIResponsesShared {
         let instructionRole: JSONValue = model.reasoning && model.compat?.supportsDeveloperRole != false ? "developer" : "system"
 
         var input: [JSONValue] = []
+        var initialEffort: String?
+        var previousEffort: String?
+        func appendConfigurationUpdate(_ effort: String) {
+            if pinInitialEffort {
+                guard effort != previousEffort else { return }
+                previousEffort = effort
+                if initialEffort == nil {
+                    initialEffort = effort
+                    return
+                }
+            }
+            input.append(["type": "configuration_update", "reasoning": ["effort": .string(effort)]])
+        }
         var messageIndex = 0
         for (sourceIndex, message) in transformed.enumerated() {
             switch message {
@@ -102,6 +116,7 @@ enum OpenAIResponsesShared {
                         let parts = call.id.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
                         var item: JSONObject = [
                             "type": "function_call",
+                            "status": "completed",
                             "call_id": .string(String(parts[0])),
                             "name": .string(call.name),
                             "arguments": .string(JSONValue.object(call.arguments).jsonString()),
@@ -117,7 +132,7 @@ enum OpenAIResponsesShared {
                 }
                 guard !output.isEmpty else { continue }
                 if configurationUpdateEffort != nil, isSameModel, let providerThinkingLevel = assistant.providerThinkingLevel {
-                    input.append(["type": "configuration_update", "reasoning": ["effort": .string(providerThinkingLevel)]])
+                    appendConfigurationUpdate(providerThinkingLevel)
                 }
                 input += output
 
@@ -135,9 +150,9 @@ enum OpenAIResponsesShared {
             messageIndex += 1
         }
         if let configurationUpdateEffort {
-            input.append(["type": "configuration_update", "reasoning": ["effort": .string(configurationUpdateEffort)]])
+            appendConfigurationUpdate(configurationUpdateEffort)
         }
-        return input
+        return (input, initialEffort)
     }
 
     /// `defaultStrict` is sent for tools that do not opt into strict sampling; `nil` sends `null`.

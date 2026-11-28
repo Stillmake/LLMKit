@@ -249,7 +249,6 @@ enum AnthropicMessages {
         let supportsMessageThreads = overrides.supportsMessageThreads
             ?? model.baseURL.contains("api.anthropic.com")
         let messages = Transcript.resolve(transcript, supportsMidConvoSystemMessages: supportsMidConvoSystemMessages)
-        let tools = Transcript.currentTools(messages)
         if options.apiKey == nil, !options.hasAuthorizationHeader {
             throw LLMError.missingAPIKey(provider: model.provider)
         }
@@ -308,15 +307,24 @@ enum AnthropicMessages {
         for (name, value) in options.raw.headers where name.lowercased() == "anthropic-beta" {
             configuredBetas = value
         }
+        let configuredFeatures = (configuredBetas ?? nil)?.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } ?? []
+        let inlineToolsBeta = "inline-tools-2026-09-15"
+        let initialTools = Transcript.initialSystemMessage(messages)?.toolsAdded ?? []
+        // Anthropic requires at least one active tool alongside the deferred placeholder.
+        let nativeToolChanges = supportsMidConvoSystemMessages && overrides.supportsMidConvoToolChanges == true
+            && !initialTools.isEmpty
+            && (configuredBetas == nil || configuredFeatures.contains(inlineToolsBeta))
+        let currentTools = Transcript.currentTools(messages)
+        let requestTools = nativeToolChanges ? initialTools : currentTools
         let betas: [String]
-        if let configuredBetas {
-            betas = configuredBetas?.split(separator: ",").map {
-                $0.trimmingCharacters(in: .whitespacesAndNewlines)
-            }.filter { !$0.isEmpty } ?? []
+        if configuredBetas != nil {
+            betas = configuredFeatures
         } else {
             var defaults: [String] = isOAuth ? ["claude-code-20250219", "oauth-2025-04-20"] : []
-            if !tools.isEmpty, !supportsEagerToolInputStreaming { defaults.append("fine-grained-tool-streaming-2025-05-14") }
+            if !requestTools.isEmpty, !supportsEagerToolInputStreaming { defaults.append("fine-grained-tool-streaming-2025-05-14") }
             if thinking?["type"] == "enabled" { defaults.append("interleaved-thinking-2025-05-14") }
+            if nativeToolChanges { defaults.append(inlineToolsBeta) }
             if threadSessionId != nil { defaults.append(messageThreadsBeta) }
             var seen: Set<String> = []
             betas = defaults.filter { seen.insert($0).inserted }
@@ -344,29 +352,82 @@ enum AnthropicMessages {
         }
 
         let allowEmptySignature = overrides.allowEmptySignature ?? false
-        var wire = convertMessages(
-            messages,
-            model: model,
-            isOAuth: isOAuth,
-            allowEmptySignature: allowEmptySignature
-        )
-
-        // Cache the conversation prefix at the last user or system turn.
-        if let cacheControl, case .object(var last)? = wire.last, ["user", "system"].contains(last["role"]?.stringValue),
-            case .array(var content)? = last["content"], case .object(var block)? = content.last,
-            ["text", "image", "tool_result"].contains(block["type"]?.stringValue)
-        {
-            block["cache_control"] = cacheControl
-            content[content.count - 1] = .object(block)
-            last["content"] = .array(content)
-            wire[wire.count - 1] = .object(last)
-        }
-
         let systemTexts = (isOAuth ? ["You are Claude Code, Anthropic's official CLI for Claude."] : [])
             + [Transcript.initialSystemMessage(messages)?.promptText].compactMap { $0.flatMap { $0.isEmpty ? nil : $0 } }
         let url = try HTTP.url(model.baseURL, path: "/v1/messages")
 
         func buildBody(disablePreferredStrictTools: Bool) throws -> (body: JSONObject, hasPreferredStrictTools: Bool) {
+            var hasPreferredStrictTools = false
+            func convertToolDefinitions(_ tools: [Tool], cacheControl: JSONValue? = nil) throws -> [JSONValue] {
+                try tools.enumerated().map { index, tool in
+                    let strict: Bool?
+                    if disablePreferredStrictTools, tool.strict == .prefer {
+                        strict = nil
+                    } else {
+                        strict = try StrictSchema.resolve(
+                            tool,
+                            supportsStrictMode: overrides.supportsStrictTools ?? false,
+                            keywordCheck: StrictSchema.anthropicKeywordCheck
+                        )
+                    }
+                    if strict == true, tool.strict == .prefer { hasPreferredStrictTools = true }
+                    let parameters = StrictSchema.parameters(of: tool, strict: strict)
+                    var inputSchema: JSONObject = strict == true ? parameters.objectValue ?? [:] : [:]
+                    inputSchema["type"] = "object"
+                    inputSchema["properties"] = parameters["properties"] ?? [:]
+                    inputSchema["required"] = parameters["required"] ?? []
+                    // Preserve the dialect for nested keywords such as Draft 7 tuple items.
+                    if let dialect = parameters["$schema"] { inputSchema["$schema"] = dialect }
+                    if let additionalProperties = parameters["additionalProperties"] {
+                        inputSchema["additionalProperties"] = additionalProperties
+                    }
+                    if let definitions = parameters["$defs"] { inputSchema["$defs"] = definitions }
+                    if let definitions = parameters["definitions"] { inputSchema["definitions"] = definitions }
+                    var definition: JSONObject = [
+                        "name": .string(wireToolName(tool.name)),
+                        "description": .string(tool.description),
+                        "input_schema": .object(inputSchema),
+                    ]
+                    if supportsEagerToolInputStreaming { definition["eager_input_streaming"] = true }
+                    if strict == true { definition["strict"] = true }
+                    if index == tools.count - 1 { definition["cache_control"] = cacheControl }
+                    return .object(definition)
+                }
+            }
+
+            var toolChanges: [SystemMessage: [JSONValue]] = [:]
+            if nativeToolChanges {
+                for case .system(let update) in messages.dropFirst()
+                    where !update.toolsAdded.isEmpty || !update.toolsRemoved.isEmpty
+                {
+                    let redefined = Set(update.toolsAdded.map(\.name))
+                    let removals: [JSONValue] = update.toolsRemoved.filter { !redefined.contains($0) }.map { name in
+                        ["type": "tool_removal", "tool": ["type": "tool_reference", "name": .string(wireToolName(name))]]
+                    }
+                    let additions: [JSONValue] = try convertToolDefinitions(update.toolsAdded).map { definition in
+                        ["type": "tool_addition", "tool": ["type": "tool_definition", "definition": definition]]
+                    }
+                    toolChanges[update] = removals + additions
+                }
+            }
+            var wire = convertMessages(
+                messages,
+                model: model,
+                isOAuth: isOAuth,
+                allowEmptySignature: allowEmptySignature,
+                toolChanges: toolChanges
+            )
+            // Cache the conversation prefix at the last user or system turn.
+            if let cacheControl, case .object(var last)? = wire.last, ["user", "system"].contains(last["role"]?.stringValue),
+                case .array(var content)? = last["content"], case .object(var block)? = content.last,
+                ["text", "image", "tool_result", "tool_addition", "tool_removal"].contains(block["type"]?.stringValue)
+            {
+                block["cache_control"] = cacheControl
+                content[content.count - 1] = .object(block)
+                last["content"] = .array(content)
+                wire[wire.count - 1] = .object(last)
+            }
+
             var body: JSONObject = [
                 "model": .string(model.id),
                 "messages": .array(wire),
@@ -384,45 +445,19 @@ enum AnthropicMessages {
             if let temperature = options.raw.temperature, options.reasoning == nil, overrides.supportsTemperature ?? true {
                 body["temperature"] = .number(temperature)
             }
-            var hasPreferredStrictTools = false
-            if !tools.isEmpty {
-                let supportsStrictTools = overrides.supportsStrictTools ?? false
-                let toolCacheControl = overrides.supportsCacheControlOnTools ?? true ? cacheControl : nil
-                body["tools"] = .array(try tools.enumerated().map { index, tool in
-                    let strict: Bool?
-                    if disablePreferredStrictTools, tool.strict == .prefer {
-                        strict = nil
-                    } else {
-                        strict = try StrictSchema.resolve(
-                            tool,
-                            supportsStrictMode: supportsStrictTools,
-                            keywordCheck: StrictSchema.anthropicKeywordCheck
-                        )
-                    }
-                    if strict == true, tool.strict == .prefer { hasPreferredStrictTools = true }
-                    let parameters = StrictSchema.parameters(of: tool, strict: strict)
-                    var inputSchema: JSONObject = strict == true ? parameters.objectValue ?? [:] : [:]
-                    inputSchema["type"] = "object"
-                    inputSchema["properties"] = parameters["properties"] ?? [:]
-                    inputSchema["required"] = parameters["required"] ?? []
-                    // Keep shared definitions so property $refs still resolve, and additionalProperties so
-                    // the model knows whether extra arguments are allowed. Other root keywords stay out:
-                    // Anthropic rejects root anyOf/oneOf/allOf with a 400.
-                    if let additionalProperties = parameters["additionalProperties"] {
-                        inputSchema["additionalProperties"] = additionalProperties
-                    }
-                    if let definitions = parameters["$defs"] { inputSchema["$defs"] = definitions }
-                    if let definitions = parameters["definitions"] { inputSchema["definitions"] = definitions }
-                    var definition: JSONObject = [
-                        "name": .string(wireToolName(tool.name)),
-                        "description": .string(tool.description),
-                        "input_schema": .object(inputSchema),
-                    ]
-                    if supportsEagerToolInputStreaming { definition["eager_input_streaming"] = true }
-                    if strict == true { definition["strict"] = true }
-                    if index == tools.count - 1 { definition["cache_control"] = toolCacheControl }
-                    return .object(definition)
-                })
+            if !requestTools.isEmpty {
+                var definitions = try convertToolDefinitions(
+                    requestTools, cacheControl: overrides.supportsCacheControlOnTools ?? true ? cacheControl : nil)
+                if nativeToolChanges {
+                    // Declare the placeholder from the first turn to keep the prompt scaffolding stable.
+                    definitions.append([
+                        "name": "__pi_deferred_placeholder__",
+                        "description": "Reserved placeholder. Never available. Never call this.",
+                        "input_schema": ["type": "object", "properties": [:], "required": []],
+                        "defer_loading": true,
+                    ])
+                }
+                body["tools"] = .array(definitions)
             }
             body["thinking"] = thinking
             if let effort { body["output_config"] = ["effort": .string(effort)] }
@@ -534,7 +569,7 @@ enum AnthropicMessages {
                     let name = block["name"]?.stringValue ?? ""
                     blocks[index] = builder.openToolCall(
                         id: block["id"]?.stringValue ?? "",
-                        name: isOAuth ? tools.first { $0.name.lowercased() == name.lowercased() }?.name ?? name : name,
+                        name: isOAuth ? currentTools.first { $0.name.lowercased() == name.lowercased() }?.name ?? name : name,
                         arguments: block["input"]?.objectValue ?? [:]
                     )
                 case "fallback" where builder.blocks.isEmpty:
@@ -622,7 +657,8 @@ enum AnthropicMessages {
         _ messages: [Message],
         model: Model,
         isOAuth: Bool,
-        allowEmptySignature: Bool
+        allowEmptySignature: Bool,
+        toolChanges: [SystemMessage: [JSONValue]] = [:]
     ) -> [JSONValue] {
         let transformed = Transcript.transform(messages, for: model) { id, _ in Transcript.sanitizeIdentifier(id) }
         var wire: [JSONValue] = []
@@ -635,7 +671,9 @@ enum AnthropicMessages {
             switch transformed[index] {
             case .system(let system):
                 let text = system.updateText
-                if !text.isEmpty { pendingSystem.append(["role": "system", "content": [["type": "text", "text": .string(text)]]]) }
+                var blocks: [JSONValue] = text.isEmpty ? [] : [["type": "text", "text": .string(text)]]
+                blocks += toolChanges[system] ?? []
+                if !blocks.isEmpty { pendingSystem.append(["role": "system", "content": .array(blocks)]) }
 
             case .user(let user):
                 let blocks: [JSONValue] = user.content.compactMap { block -> JSONValue? in

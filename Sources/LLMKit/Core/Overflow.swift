@@ -3,7 +3,7 @@ import Foundation
 private let overflowPatterns: [NSRegularExpression] = [
         #"prompt (?:is )?too long"#,
         #"prompt exceeds max length"#,
-        #"request_too_large"#,
+        #"(?<![a-z0-9_])request_too_large(?![a-z0-9_])"#,
         #"input is too long for requested model"#,
         #"exceeds the context window"#,
         #"exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\d,]+ tokens?|\s*\([\d,]+\))"#,

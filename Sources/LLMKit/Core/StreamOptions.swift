@@ -56,7 +56,7 @@ public struct StreamOptions: Sendable {
     public var extraBody: JSONObject?
     /// Final hook over the request body before it is sent.
     public var onPayload: (@Sendable (inout JSONValue, Model) -> Void)?
-    /// Observes the HTTP response before its body is consumed.
+    /// Observes the HTTP response for every attempt, including failures, before its body is consumed.
     public var onResponse: (@Sendable (HTTPURLResponse, Model) -> Void)?
     /// Anthropic `metadata.user_id`.
     public var userId: String?

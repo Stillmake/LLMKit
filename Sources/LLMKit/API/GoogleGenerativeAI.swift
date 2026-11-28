@@ -10,39 +10,39 @@ enum GoogleGenerativeAI {
         let messages = Transcript.collapseSystemMessages(transcript)
         let tools = Transcript.currentTools(messages)
         let geminiMajorVersion = model.id.lowercased()
-            .firstMatch(of: /^gemini(?:-live)?-(\d+)/).flatMap { Int($0.1) }
-        let supportsStrictMode = (geminiMajorVersion ?? 0) >= 3
+            .firstMatch(of: /gemini(?:-live)?-(\d+)/).flatMap { Int($0.1) }
+        let supportsStrictMode = model.compat?.supportsStrictMode ?? ((geminiMajorVersion ?? 0) >= 3)
 
         var generationConfig: JSONObject = ["maxOutputTokens": .number(Double(options.maxTokens))]
         if let temperature = options.raw.temperature { generationConfig["temperature"] = .number(temperature) }
         if model.reasoning {
             // Gemini 3 and Gemma 4 take a discrete level; Gemini 2.5 takes a token budget.
             let id = model.id.lowercased()
-            let usesThinkingLevel = id.contains(/gemini-3(?:\.\d+)?-(?:pro|flash)/) || id.contains(/gemini-(?:[4-9]|[1-9]\d)/)
+            let usesThinkingLevel = id.contains(/gemini-3(?:\.\d+)?-(?:pro|flash)/) || (geminiMajorVersion ?? 0) >= 4
                 || id == "gemini-flash-latest" || id == "gemini-flash-lite-latest" || id.contains(/gemma-?4/)
-            func googleLevel(_ level: ThinkingLevel) throws -> String {
-                let mapped: String = if case .value(let value)? = model.thinkingLevelMap?[level] { value.lowercased() } else { level.rawValue }
-                guard ["minimal", "low", "medium", "high"].contains(mapped) else {
+            func googleLevel(_ level: ThinkingLevel) throws -> ThinkingLevel {
+                let mapped = (model.thinkingValue(for: level) ?? level.rawValue).lowercased()
+                guard let resolved = ThinkingLevel(rawValue: mapped), resolved != .off, resolved != .max else {
                     throw LLMError.invalidRequest("Unsupported Google thinking level mapping for \(model.provider)/\(model.id): \(level) -> \(mapped)")
                 }
-                return mapped.uppercased()
+                return resolved
             }
 
             if let level = options.reasoning {
                 let resolved = try googleLevel(level)
                 if usesThinkingLevel {
-                    generationConfig["thinkingConfig"] = ["includeThoughts": true, "thinkingLevel": .string(resolved)]
+                    generationConfig["thinkingConfig"] = ["includeThoughts": true, "thinkingLevel": .string(resolved.rawValue.uppercased())]
                 } else {
                     let budget: Int
                     if let custom = options.raw.thinkingBudgets {
-                        budget = custom[level]
+                        budget = custom[resolved]
                     } else {
-                        let budgets: [String: Int]? = if id.contains("2.5-pro") {
-                            ["MINIMAL": 128, "LOW": 2048, "MEDIUM": 8192, "HIGH": 32768]
+                        let budgets: ThinkingBudgets? = if id.contains("2.5-pro") {
+                            ThinkingBudgets(minimal: 128, high: 32768)
                         } else if id.contains("2.5-flash-lite") {
-                            ["MINIMAL": 512, "LOW": 2048, "MEDIUM": 8192, "HIGH": 24576]
+                            ThinkingBudgets(minimal: 512, high: 24576)
                         } else if id.contains("2.5-flash") {
-                            ["MINIMAL": 128, "LOW": 2048, "MEDIUM": 8192, "HIGH": 24576]
+                            ThinkingBudgets(minimal: 128, high: 24576)
                         } else {
                             nil
                         }
@@ -54,7 +54,7 @@ enum GoogleGenerativeAI {
             } else {
                 let fallback = model.clampThinkingLevel(.off)
                 if usesThinkingLevel, fallback != .off {
-                    generationConfig["thinkingConfig"] = ["thinkingLevel": .string(try googleLevel(fallback))]
+                    generationConfig["thinkingConfig"] = ["thinkingLevel": .string(try googleLevel(fallback).rawValue.uppercased())]
                 } else {
                     generationConfig["thinkingConfig"] = ["thinkingBudget": 0]
                 }
@@ -191,7 +191,23 @@ enum GoogleGenerativeAI {
         builder.start()
 
         var current: ResponseBuilder.Block?
+        var receivedChunkCount = 0
+        var promptBlockError: String?
         for try await (_, chunk) in HTTP.jsonEvents(bytes) {
+            receivedChunkCount += 1
+            if promptBlockError == nil, let feedback = chunk["promptFeedback"], let reason = feedback["blockReason"]?.stringValue {
+                var details = ["Google prompt blocked: \(reason)"]
+                if let message = feedback["blockReasonMessage"]?.stringValue, !message.isEmpty { details.append(message) }
+                let ratings = (feedback["safetyRatings"]?.arrayValue ?? []).compactMap { rating -> String? in
+                    guard let category = rating["category"]?.stringValue, !category.isEmpty else { return nil }
+                    let probability = rating["probability"]?.stringValue ?? ""
+                    return probability.isEmpty ? category : "\(category) (\(probability))"
+                }
+                if !ratings.isEmpty {
+                    details.append("Safety rating\(ratings.count == 1 ? "" : "s"): \(ratings.joined(separator: ", "))")
+                }
+                promptBlockError = details.joined(separator: ". ")
+            }
             if let error = chunk["error"], !error.isNull {
                 throw LLMError.provider(HTTP.errorMessage(from: JSONValue.object(["error": error]).jsonString()))
             }
@@ -247,6 +263,11 @@ enum GoogleGenerativeAI {
                 usage.applyCost(of: model)
                 builder.message.usage = usage
             }
+        }
+        if builder.message.rawStopReason == nil {
+            if let promptBlockError { throw LLMError.provider(promptBlockError) }
+            let chunkLabel = receivedChunkCount == 1 ? "chunk" : "chunks"
+            throw LLMError.protocolViolation("Google stream ended without a finish reason after receiving \(receivedChunkCount) \(chunkLabel)")
         }
     }
 

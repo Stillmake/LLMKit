@@ -58,7 +58,7 @@ enum OpenAICompletions {
             // and every host accepts system, so only OpenAI's own API gets developer by default.
             let isOpenAI = provider == "openai" || url.contains("api.openai.com")
             let detectedFormat: ThinkingFormat =
-                isDeepSeek ? .deepSeek : isZai ? .zai : isTogether ? .together : isAntLing ? .antLing : isOpenRouter ? .openRouter : .openAI
+                isDeepSeek || isAntLing ? .deepSeek : isZai ? .zai : isTogether ? .together : isOpenRouter ? .openRouter : .openAI
 
             let overrides = model.compat ?? ModelCompat()
             supportsStore = overrides.supportsStore ?? !isNonStandard
@@ -74,7 +74,7 @@ enum OpenAICompletions {
             requiresToolsWithToolHistory = overrides.requiresToolsWithToolHistory ?? false
             requiresThinkingAsText = overrides.requiresThinkingAsText ?? false
             requiresReasoningContentOnAssistantMessages = overrides.requiresReasoningContentOnAssistantMessages ?? isDeepSeek
-            thinkingFormat = overrides.thinkingFormat ?? detectedFormat
+            thinkingFormat = overrides.thinkingFormat == .antLing ? .deepSeek : overrides.thinkingFormat ?? detectedFormat
             chatTemplateKwargs = overrides.chatTemplateKwargs ?? [:]
             chatTemplateArgs = overrides.chatTemplateArgs ?? [:]
             openRouterRouting = overrides.openRouterRouting
@@ -94,9 +94,6 @@ enum OpenAICompletions {
             vllmPriority = overrides.vllmPriority
         }
     }
-
-    /// Streamed delta fields that may carry reasoning text, in priority order.
-    static let reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"]
 
     static func run(model: Model, transcript: [Message], options: ResolvedOptions, builder: ResponseBuilder) async throws {
         let compat = Compat(model: model)
@@ -131,8 +128,23 @@ enum OpenAICompletions {
         var thinkingBlock: ResponseBuilder.Block?
         var toolBlocksByIndex: [Int: ResponseBuilder.Block] = [:]
         var toolBlocksById: [String: ResponseBuilder.Block] = [:]
-        var reasoningDetails: [JSONObject]?
-        var hasFinishReason = false
+        var reasoningDetails: [JSONObject] = []
+        var reasoningField: String?
+        var reasoningOpaque: String?
+        let isOpenRouter = model.provider == "openrouter" || model.baseURL.contains("openrouter.ai")
+        var nativeFinishReason: String?
+
+        defer {
+            if let thinkingBlock {
+                if !reasoningDetails.isEmpty {
+                    thinkingBlock.signature = JSONValue.array(reasoningDetails.map(JSONValue.object)).jsonString()
+                } else if let reasoningOpaque {
+                    var signature: JSONObject = ["reasoning_opaque": .string(reasoningOpaque)]
+                    if let reasoningField { signature["field"] = .string(reasoningField) }
+                    thinkingBlock.signature = JSONValue.object(signature).jsonString()
+                }
+            }
+        }
 
         for try await (_, chunk) in HTTP.jsonEvents(bytes) {
             if let error = chunk["error"], !error.isNull {
@@ -152,7 +164,10 @@ enum OpenAICompletions {
             if chunk["usage"]?.isNull ?? true, let usage = choice["usage"], !usage.isNull {
                 builder.message.usage = parseUsage(usage, model: model)
             }
-            if let finishReason = choice["finish_reason"]?.stringValue {
+            if isOpenRouter, let native = choice["native_finish_reason"]?.stringValue, !native.isEmpty {
+                nativeFinishReason = native
+            }
+            if let finishReason = choice["finish_reason"]?.stringValue, !finishReason.isEmpty {
                 builder.message.rawStopReason = finishReason
                 switch finishReason {
                 case "stop", "end": builder.message.stopReason = .stop
@@ -162,34 +177,37 @@ enum OpenAICompletions {
                     builder.message.stopReason = .error
                     builder.message.errorMessage = "Provider finish_reason: \(finishReason)"
                 }
-                hasFinishReason = true
             }
             guard let delta = choice["delta"]?.objectValue else { continue }
 
             // Reasoning precedes content: some proxies (LiteLLM) send both in one delta, and the
             // thinking block must come before the text block.
             // Servers name the reasoning field differently; some send the same text under two names.
-            if let field = reasoningFields.first(where: { !(delta[$0]?.stringValue ?? "").isEmpty }),
+            if let field = OpenAICompletionsReasoning.fields.first(where: { !(delta[$0]?.stringValue ?? "").isEmpty }),
                 let reasoning = delta[field]?.stringValue
             {
                 let signature = model.provider == "opencode-go" && field == "reasoning" ? "reasoning_content" : field
+                reasoningField = signature
                 let block = thinkingBlock ?? builder.openThinking(signature: signature)
                 thinkingBlock = block
                 builder.appendText(reasoning, to: block)
+            }
+            if let opaque = delta["reasoning_opaque"]?.stringValue, !opaque.isEmpty {
+                if thinkingBlock == nil { thinkingBlock = builder.openThinking() }
+                reasoningOpaque = opaque
             }
 
             // OpenRouter streams structured reasoning replay data as deltas: consecutive text and
             // summary entries merge into one logical entry; encrypted entries stay discrete.
             for detail in delta["reasoning_details"]?.arrayValue ?? [] {
-                guard case .object(let entry) = detail, isReasoningDetail(entry) else { continue }
-                if thinkingBlock == nil { thinkingBlock = builder.openThinking(signature: "") }
-                var details = reasoningDetails ?? []
+                guard case .object(let entry) = detail, OpenAICompletionsReasoning.isReasoningDetail(entry) else { continue }
+                if thinkingBlock == nil { thinkingBlock = builder.openThinking() }
                 let mergeKey: String? = switch entry["type"]?.stringValue {
                 case "reasoning.text": "text"
                 case "reasoning.summary": "summary"
                 default: nil
                 }
-                if let mergeKey, var last = details.last, last["type"] == entry["type"] {
+                if let mergeKey, var last = reasoningDetails.last, last["type"] == entry["type"] {
                     last[mergeKey] = .string((last[mergeKey]?.stringValue ?? "") + (entry[mergeKey]?.stringValue ?? ""))
                     if mergeKey == "text", (last["signature"]?.stringValue ?? "").isEmpty, let signature = entry["signature"] {
                         last["signature"] = signature
@@ -198,11 +216,10 @@ enum OpenAICompletions {
                         last[key] = entry[key]
                     }
                     if (last["format"]?.stringValue ?? "").isEmpty { last["format"] = entry["format"] }
-                    details[details.count - 1] = last
+                    reasoningDetails[reasoningDetails.count - 1] = last
                 } else {
-                    details.append(entry)
+                    reasoningDetails.append(entry)
                 }
-                reasoningDetails = details
             }
 
             if let content = delta["content"]?.stringValue, !content.isEmpty {
@@ -229,27 +246,27 @@ enum OpenAICompletions {
             }
         }
 
-        if let reasoningDetails, let thinkingBlock {
-            thinkingBlock.signature = JSONValue.array(reasoningDetails.map(JSONValue.object)).jsonString()
-        }
-        if !hasFinishReason, !compat.supportsFinishReason {
+        if builder.message.rawStopReason == nil {
+            guard !compat.supportsFinishReason else {
+                throw LLMError.protocolViolation("Stream ended without finish_reason")
+            }
             builder.message.stopReason = builder.hasToolCalls ? .toolUse : .stop
-        } else if !hasFinishReason {
-            throw LLMError.protocolViolation("Stream ended without finish_reason")
         }
-    }
-
-    private static func isReasoningDetail(_ detail: JSONObject) -> Bool {
-        let commonFieldsValid = (detail["id"].map { $0 == .null || $0.stringValue != nil } ?? true)
-            && (detail["format"].map { $0.stringValue != nil } ?? true)
-            && (detail["index"].map { $0.doubleValue != nil } ?? true)
-        guard commonFieldsValid else { return false }
-        switch detail["type"]?.stringValue {
-        case "reasoning.summary": return detail["summary"]?.stringValue != nil
-        case "reasoning.encrypted": return detail["data"]?.stringValue != nil
-        case "reasoning.text":
-            return detail["text"]?.stringValue != nil && (detail["signature"].map { $0 == .null || $0.stringValue != nil } ?? true)
-        default: return false
+        if let nativeFinishReason {
+            if let finishReason = builder.message.rawStopReason, nativeFinishReason != finishReason {
+                builder.message.rawStopReason = "\(finishReason).\(nativeFinishReason)"
+                if builder.message.stopReason == .error, let message = builder.message.errorMessage {
+                    builder.message.errorMessage = "\(message) (native_finish_reason: \(nativeFinishReason))"
+                }
+            }
+            if builder.message.stopReason == .stop,
+                !["stop", "end_turn", "stop_sequence", "eos", "complete", "completed", "pause_turn", "compaction", "end_of_stream"]
+                    .contains(nativeFinishReason.lowercased()),
+                !builder.blocks.contains(where: { $0.kind == .toolCall || ($0.kind == .text && !$0.text.allSatisfy(\.isWhitespace)) })
+            {
+                builder.message.stopReason = .error
+                builder.message.errorMessage = "OpenRouter returned an empty response (native_finish_reason: \(nativeFinishReason))"
+            }
         }
     }
 
@@ -400,8 +417,6 @@ enum OpenAICompletions {
                 } else if offMapping != .unsupported {
                     body["thinking"] = .string(offValue ?? "none")
                 }
-            case .antLing where effort != nil:
-                if let effort, case .value(let value)? = model.thinkingLevelMap?[effort] { body["reasoning"] = ["effort": .string(value)] }
             default:
                 if compat.supportsReasoningEffort, let value = effortValue ?? offValue.map(JSONValue.string) {
                     body["reasoning_effort"] = value
@@ -528,16 +543,56 @@ enum OpenAICompletions {
                     "content": compat.requiresAssistantAfterToolResult || compat.requiresNonNullAssistantContent ? "" : .null,
                 ]
 
-                // `reasoning_details` (OpenRouter) is the structured alternative to a raw reasoning field.
-                let reasoningDetails = thinkingBlocks.lazy.compactMap { block -> [JSONValue]? in
-                    guard let signature = block.thinkingSignature, signature.hasPrefix("["),
-                        case .array(let details)? = try? JSONValue(parsing: signature),
-                        !details.isEmpty, details.allSatisfy({ $0.objectValue.map(isReasoningDetail) ?? false })
-                    else { return nil }
-                    return details
-                }.first
-
                 let nonEmptyThinking = thinkingBlocks.filter { !$0.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                var structuredReplay: OpenAICompletionsReasoning?
+                var opaqueReplay: OpenAICompletionsReasoning?
+                for block in thinkingBlocks {
+                    guard let signature = block.thinkingSignature,
+                        signature.hasPrefix("[") || signature.hasPrefix("{"),
+                        let stored = try? JSONValue(parsing: signature)
+                    else { continue }
+                    if let details = stored.arrayValue, !details.isEmpty,
+                        details.allSatisfy({ $0.objectValue.map(OpenAICompletionsReasoning.isReasoningDetail) ?? false })
+                    {
+                        structuredReplay = .details(details)
+                        break
+                    }
+                    if let opaque = stored["reasoning_opaque"]?.stringValue, !opaque.isEmpty {
+                        let field = stored["field"]?.stringValue
+                        if stored["field"] == nil || field.map(OpenAICompletionsReasoning.fields.contains) == true {
+                            opaqueReplay = .opaque(field: field, value: opaque)
+                        }
+                    }
+                }
+                if structuredReplay == nil {
+                    // Older sessions stored OpenRouter's encrypted entries on tool calls.
+                    let legacyDetails = toolCalls.compactMap { call -> JSONValue? in
+                        guard let signature = call.thoughtSignature, signature.hasPrefix("{"),
+                            let stored = try? JSONValue(parsing: signature), let detail = stored.objectValue,
+                            detail["type"] == "reasoning.encrypted", OpenAICompletionsReasoning.isReasoningDetail(detail),
+                            let id = detail["id"]?.stringValue, !id.isEmpty,
+                            let data = detail["data"]?.stringValue, !data.isEmpty
+                        else { return nil }
+                        return stored
+                    }
+                    if !legacyDetails.isEmpty { structuredReplay = .details(legacyDetails) }
+                }
+                let fieldReplay = nonEmptyThinking.first?.thinkingSignature.flatMap { field in
+                    OpenAICompletionsReasoning.fields.contains(field) ? OpenAICompletionsReasoning.field(field) : nil
+                }
+                let field: String?
+                switch structuredReplay ?? opaqueReplay ?? fieldReplay {
+                case .details(let details):
+                    converted["reasoning_details"] = .array(details)
+                    field = nil
+                case .opaque(let name, let value):
+                    converted["reasoning_opaque"] = .string(value)
+                    field = name
+                case .field(let name):
+                    field = name
+                case nil:
+                    field = nil
+                }
                 if !nonEmptyThinking.isEmpty, compat.requiresThinkingAsText {
                     // Plain text without tags, so the model does not learn to mimic them.
                     let thinkingText = nonEmptyThinking.map(\.thinking).joined(separator: "\n\n")
@@ -545,11 +600,9 @@ enum OpenAICompletions {
                 } else {
                     // Always a plain string: array content makes some models (DeepSeek via NIM) echo the structure.
                     if !text.isEmpty { converted["content"] = .string(text) }
-                    if !nonEmptyThinking.isEmpty, reasoningDetails == nil, var field = nonEmptyThinking[0].thinkingSignature {
+                    if !nonEmptyThinking.isEmpty, var field {
                         if model.provider == "opencode-go", field == "reasoning" { field = "reasoning_content" }
-                        if reasoningFields.contains(field) {
-                            converted[field] = .string(nonEmptyThinking.map(\.thinking).joined(separator: "\n"))
-                        }
+                        converted[field] = .string(nonEmptyThinking.map(\.thinking).joined(separator: "\n"))
                     }
                 }
                 if !toolCalls.isEmpty {
@@ -561,7 +614,6 @@ enum OpenAICompletions {
                         ]
                     })
                 }
-                if let reasoningDetails { converted["reasoning_details"] = .array(reasoningDetails) }
                 if compat.requiresReasoningContentOnAssistantMessages, model.reasoning, converted["reasoning_content"] == nil {
                     converted["reasoning_content"] = ""
                 }
