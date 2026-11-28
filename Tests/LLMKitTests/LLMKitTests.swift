@@ -406,9 +406,10 @@ import Testing
         let catalog = ModelCatalog.builtin
         #expect(catalog.models.count > 1000)
         #expect(catalog.providers.contains("anthropic"))
-        #expect(Set(catalog.providerInfo.keys) == Set(catalog.providers))
+        #expect(Set(catalog.providers).isSubset(of: catalog.providerInfo.keys))
         #expect(catalog.providerInfo["deepseek"] == ProviderInfo(name: "DeepSeek", logo: "deepseek"))
         #expect(catalog.version != nil)
+        #expect(ModelCatalog.pinnedVersion != nil)
         #expect(catalog.generatedAt != nil)
     }
 
@@ -493,9 +494,8 @@ import Testing
         Model(id: "test-model", api: .openAICompletions, provider: provider, baseURL: baseURL)
     }
 
-    @Test func keepsTheVersionInSyncWithTheCatalog() throws {
-        let version = try #require(ModelCatalog.builtin.version)
-        #expect(ClientIdentity().formattedUserAgent.hasPrefix("pi/\(version) ("))
+    @Test func usesThePortedVersionInTheDefaultUserAgent() {
+        #expect(ClientIdentity().formattedUserAgent.hasPrefix("pi/\(ClientIdentity.portedPiAIVersion) ("))
     }
 
     @Test func formatsUserAgents() {

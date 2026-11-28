@@ -89,7 +89,7 @@ Not ported yet: Bedrock, Vertex, Azure, Mistral's native API, Codex WebSocket tr
 
 ## Updating the catalog at runtime
 
-`ModelCatalog.builtin` is a bundled snapshot. Newer ones come from pi-ai's data on jsDelivr, when the app decides:
+`ModelCatalog.builtin` is a compressed snapshot available offline. Its `version` may lag behind `ModelCatalog.pinnedVersion`. Use `try await ModelCatalog.downloadPinned()` to fetch LLMKit's selected pi-ai catalog with SHA-256 verification of the manifest and every provider file. Apps can also follow the newest published catalog on jsDelivr:
 
 ```swift
 let latest = try await ModelCatalog.latestVersion()          // one small request
@@ -102,7 +102,7 @@ if latest != catalog.version {
 
 ## Syncing with pi-ai
 
-This snapshot ports the supported chat APIs from pi-mono tag `v1.7.0`. OAuth login flows (`Sources/LLMKit/Auth/`) were reviewed through that tag, and the catalog comes from `@earendil-works/pi-ai` 1.7.0. LLMKit syncs periodically and can skip intermediate releases.
+This port tracks the supported chat APIs and OAuth login flows from pi-mono tag `v1.7.0`. The selected catalog version is recorded in `Sources/LLMKit/Resources/catalog-pin.json`. LLMKit syncs periodically and can skip intermediate releases.
 
 LLMKit release tags are independent of pi-ai versions. Starting with this release, tags use the release date as `YYYY.M.D` with no zero padding (`2026.11.15`); an LLMKit tag is not a claim of parity with a pi-ai release.
 
@@ -116,7 +116,9 @@ mkdir -p upstream/pi-ai && (cd upstream/pi-ai && npm pack @earendil-works/pi-ai@
 Scripts/sync-catalog.py upstream/pi-ai/package/dist/providers/data
 ```
 
-Bump the pi-ai version in `ClientIdentity`'s detailed `User-Agent` to match the catalog. Provider names and logos come from models.dev; add missing providers to the script's `PROVIDER_OVERRIDES`. Upstream changes port file-for-file: `packages/ai/src/api/` → `Sources/LLMKit/API/`, `packages/ai/src/auth/oauth/` → `Sources/LLMKit/Auth/Providers/`. Run `swift test` before committing a sync.
+The script verifies the upstream provider files, updates the pin and provider metadata, and reports changes relative to the bundled snapshot. Pass `--refresh-builtin` to also regenerate `models.json.deflate`. Refresh the bundled snapshot when an adapter fix relies on new `compat` or `thinkingLevelMap` values, when new Copilot models need login-time enablement, or when shipping important model changes for offline use. Provider names and logos come from models.dev. Add missing providers to the script's `PROVIDER_OVERRIDES`.
+
+Update the default pi-ai version in `ClientIdentity` when porting adapter code. Upstream changes port file-for-file from `packages/ai/src/api/` to `Sources/LLMKit/API/` and from `packages/ai/src/auth/oauth/` to `Sources/LLMKit/Auth/Providers/`. Run `swift test` before committing a sync.
 
 ## License
 

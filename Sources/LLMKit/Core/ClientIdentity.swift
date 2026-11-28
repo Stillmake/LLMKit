@@ -61,6 +61,8 @@ public struct ClientAttribution: Codable, Sendable, Hashable {
 /// How LLMKit identifies the calling app to providers. Ports pi-ai's `utils/identity.ts`. Every field is
 /// optional; absent fields use pi-ai's defaults: a detailed `User-Agent` with pi-ai's version and no attribution headers.
 public struct ClientIdentity: Codable, Sendable, Hashable {
+    static let portedPiAIVersion = "1.7.0"
+
     /// Default: `.detailed`.
     public var userAgent: UserAgentMode?
     /// Provider attribution headers. Absent: none.
@@ -98,8 +100,7 @@ public struct ClientIdentity: Codable, Sendable, Hashable {
             #else
             let arch = "x64"
             #endif
-            // pi-ai's PI_AI_VERSION; bump with each catalog sync.
-            return "pi/\(version ?? "1.7.0") (\(platform); \(arch))"
+            return "pi/\(version ?? Self.portedPiAIVersion) (\(platform); \(arch))"
         }
     }
 

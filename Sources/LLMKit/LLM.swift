@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// One Swift API over every supported LLM wire format.
@@ -118,6 +119,25 @@ public struct ModelCatalog: Sendable {
         var models: [Model]
     }
 
+    private struct Pin: Decodable, Sendable {
+        var version: String
+        var manifestSHA256: String
+    }
+
+    private static let pin: Pin? = {
+        guard let url = Bundle.module.url(forResource: "catalog-pin", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let pin = try? JSONDecoder().decode(Pin.self, from: data)
+        else {
+            assertionFailure("The bundled catalog-pin.json is missing or malformed")
+            return nil
+        }
+        return pin
+    }()
+
+    /// The pi-ai version selected for verified downloads. The bundled snapshot can be older.
+    public static var pinnedVersion: String? { pin?.version }
+
     private static func timestampFormatter() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -136,18 +156,24 @@ public struct ModelCatalog: Sendable {
     }()
 
     public static let builtin: ModelCatalog = {
-        guard let url = Bundle.module.url(forResource: "models", withExtension: "json"),
-            let catalog = try? ModelCatalog(contentsOf: url)
+        guard let url = Bundle.module.url(forResource: "models.json", withExtension: "deflate"),
+            let compressed = try? Data(contentsOf: url),
+            let data = try? (compressed as NSData).decompressed(using: .zlib),
+            let catalog = try? ModelCatalog(snapshotData: data as Data)
         else {
-            assertionFailure("The bundled models.json is missing or malformed")
+            assertionFailure("The bundled models.json.deflate is missing or malformed")
             return ModelCatalog(models: [], providerInfo: bundledProviderInfo)
         }
         return catalog
     }()
 
-    /// Loads a snapshot saved by `write(to:)` (or the bundled one).
+    /// Loads a JSON snapshot saved by `write(to:)`.
     public init(contentsOf url: URL) throws {
-        let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: url))
+        try self.init(snapshotData: Data(contentsOf: url))
+    }
+
+    private init(snapshotData: Data) throws {
+        let snapshot = try JSONDecoder().decode(Snapshot.self, from: snapshotData)
         self.init(
             models: snapshot.models,
             providerInfo: Self.bundledProviderInfo,
@@ -178,22 +204,37 @@ public struct ModelCatalog: Sendable {
         return try JSONDecoder().decode(Resolved.self, from: data).version
     }
 
-    /// Downloads the catalog pi-ai `version` publishes (`dist/providers/data`) from jsDelivr's
-    /// immutable versioned URLs, keeping the chat models on wire formats LLMKit implements,
-    /// exactly as `Scripts/sync-catalog.py` does for the bundled snapshot.
+    /// Downloads the pinned pi-ai catalog and verifies the manifest and provider files before decoding.
+    public static func downloadPinned(session: URLSession = .shared) async throws -> ModelCatalog {
+        guard let pin else { throw LLMError.protocolViolation("The bundled catalog pin is missing or malformed") }
+        return try await download(version: pin.version, manifestSHA256: pin.manifestSHA256, session: session)
+    }
+
+    /// Downloads a published pi-ai version from jsDelivr, keeping the chat models LLMKit supports.
     public static func download(version: String, session: URLSession = .shared) async throws -> ModelCatalog {
+        try await download(version: version, manifestSHA256: nil, session: session)
+    }
+
+    static func download(version: String, manifestSHA256: String?, session: URLSession) async throws -> ModelCatalog {
         struct Manifest: Decodable {
             var generatedAt: String?
             var files: [String: String]
         }
         let base = "https://cdn.jsdelivr.net/\(packagePath)@\(version)/dist/providers/data/"
-        let manifest = try JSONDecoder().decode(
-            Manifest.self, from: try await fetch(base + ".manifest.json", session: session))
+        let manifestData = try await fetch(base + ".manifest.json", session: session)
+        if let manifestSHA256, sha256(manifestData) != manifestSHA256 {
+            throw LLMError.protocolViolation("Catalog checksum mismatch for .manifest.json (pi-ai \(version))")
+        }
+        let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
         let models = try await withThrowingTaskGroup(of: [Model].self) { group in
-            for file in manifest.files.keys {
+            for (file, digest) in manifest.files {
                 group.addTask {
+                    let data = try await fetch(base + file, session: session)
+                    if manifestSHA256 != nil, sha256(data) != digest {
+                        throw LLMError.protocolViolation("Catalog checksum mismatch for \(file) (pi-ai \(version))")
+                    }
                     let groups = try JSONDecoder().decode(
-                        [String: [String: JSONValue]].self, from: try await fetch(base + file, session: session))
+                        [String: [String: JSONValue]].self, from: data)
                     return try groups
                         .filter { supportedAPIs.contains(API(rawValue: $0.key)) }
                         .flatMap(\.value.values)
@@ -209,6 +250,10 @@ public struct ModelCatalog: Sendable {
             version: version,
             generatedAt: manifest.generatedAt.flatMap(timestampFormatter().date)
         )
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fetch(_ string: String, session: URLSession) async throws -> Data {
